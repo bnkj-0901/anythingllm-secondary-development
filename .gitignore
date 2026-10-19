@@ -1,12 +1,28 @@
-v-env
-.env
-!.env.example
+# Local dependencies and build output
+vendor/*.zip
+integrations/anythingllm/.env
+**/node_modules/
+**/.env
+**/.env.*
+!**/.env.example
+!**/.env.*.example
+**/__pycache__/
+**/.venv/
+**/dist/
+**/build/
 
-node_modules
-__pycache__
-v-env
-.DS_Store
-aws_cf_deploy_anything_llm.json
-yarn.lock
-*.bak
-.idea
+# Runtime data
+integrations/anythingllm/data/
+/vendor/anythingllm/server/storage/
+/vendor/anythingllm/server/public/
+/vendor/anythingllm/collector/hotdir/
+/vendor/anythingllm/collector/storage/
+/vendor/anythingllm/collector/outputs/
+/work/knowledge-erp-document/render/
+/work/knowledge-erp-document/review.pdf
+*.log
+*.db
+*.db-shm
+*.db-wal
+*.pem
+*.key

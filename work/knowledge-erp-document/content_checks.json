@@ -1,0 +1,9 @@
+{
+  "requirements": 23,
+  "bookkeepingExample": "passed",
+  "budgetTotals": "passed",
+  "tables": 17,
+  "chapters": 15,
+  "markdownCharacters": 20244,
+  "outputBytes": 134918
+}

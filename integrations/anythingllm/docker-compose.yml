@@ -1,0 +1,28 @@
+name: knowledge-base
+
+services:
+  knowledge-base:
+    build:
+      context: ../../vendor/anythingllm
+      dockerfile: docker/Dockerfile
+      args:
+        ARG_UID: ${UID:-1000}
+        ARG_GID: ${GID:-1000}
+    restart: unless-stopped
+    ports:
+      - "127.0.0.1:${KNOWLEDGE_PORT:-3001}:3001"
+    env_file:
+      - .env
+    environment:
+      STORAGE_DIR: /app/server/storage
+      ANYTHINGLLM_CHROMIUM_ARGS: --no-sandbox,--disable-setuid-sandbox
+    volumes:
+      - ./.env:/app/server/.env
+      - knowledge_storage:/app/server/storage
+      - knowledge_hotdir:/app/collector/hotdir
+      - knowledge_outputs:/app/collector/outputs
+
+volumes:
+  knowledge_storage:
+  knowledge_hotdir:
+  knowledge_outputs:

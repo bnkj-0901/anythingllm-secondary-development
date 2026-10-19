@@ -1,0 +1,21 @@
+{
+  "name": "AnythingLLM",
+  "repository": "https://github.com/Mintplex-Labs/anything-llm.git",
+  "version": "v1.18.0",
+  "commit": "3e4f9411b67f2dd7fa9fc6f2b95dfacbda0633ba",
+  "license": "MIT",
+  "sourceDirectory": "vendor/anythingllm",
+  "checkoutDirectories": ["server", "collector", "frontend", "docker"],
+  "requiredFiles": [
+    "LICENSE",
+    "package.json",
+    "server/package.json",
+    "server/yarn.lock",
+    "collector/package.json",
+    "collector/yarn.lock",
+    "frontend/package.json",
+    "frontend/yarn.lock",
+    "docker/Dockerfile",
+    "docker/docker-entrypoint.sh"
+  ]
+}
