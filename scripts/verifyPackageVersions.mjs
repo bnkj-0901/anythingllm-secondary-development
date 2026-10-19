@@ -1,5 +1,11 @@
-import serverPackageJson from '../../server/package.json' assert { type: 'json' };
-import collectorPackageJson from '../../collector/package.json' assert { type: 'json' };
+import { readFileSync } from 'node:fs';
+
+const serverPackageJson = JSON.parse(
+  readFileSync(new URL('../server/package.json', import.meta.url), 'utf8')
+);
+const collectorPackageJson = JSON.parse(
+  readFileSync(new URL('../collector/package.json', import.meta.url), 'utf8')
+);
 const { dependencies: serverDependencies } = serverPackageJson;
 const { dependencies: collectorDependencies } = collectorPackageJson;
 

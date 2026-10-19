@@ -13,6 +13,7 @@ on:
     paths:
       - "server/package.json"
       - "collector/package.json"
+      - "scripts/verifyPackageVersions.mjs"
 
 jobs:
   run-script:
@@ -28,9 +29,7 @@ jobs:
           node-version: '18'
 
       - name: Run verifyPackageVersions.mjs script
-        run: |
-          cd extras/scripts
-          node verifyPackageVersions.mjs
+        run: node scripts/verifyPackageVersions.mjs
 
       - name: Fail job on error
         if: failure()

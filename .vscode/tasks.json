@@ -17,7 +17,7 @@
           }
         }
       },
-      "command": "cd ${workspaceFolder}/collector/ && yarn dev",
+      "command": "yarn dev",
       "runOptions": {
         "instanceLimit": 1,
         "reevaluateOnRerun": true
@@ -46,7 +46,7 @@
           }
         }
       },
-      "command": "if [ \"${CODESPACES}\" = \"true\" ]; then while ! gh codespace ports -c $CODESPACE_NAME | grep 3001; do sleep 1; done; gh codespace ports visibility 3001:public -c $CODESPACE_NAME; fi & cd ${workspaceFolder}/server/ && yarn dev",
+      "command": "yarn dev",
       "runOptions": {
         "instanceLimit": 1,
         "reevaluateOnRerun": true
@@ -75,7 +75,7 @@
           }
         }
       },
-      "command": "cd ${workspaceFolder}/frontend/ && yarn dev",
+      "command": "yarn dev",
       "runOptions": {
         "instanceLimit": 1,
         "reevaluateOnRerun": true
