@@ -19,3 +19,8 @@ dist
 *.njsproj
 *.sln
 *.sw?
+
+# Local environment and uni-app build output
+.env.*
+!.env.example
+unpackage/
