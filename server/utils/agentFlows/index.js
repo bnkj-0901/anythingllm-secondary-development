@@ -174,10 +174,19 @@ class AgentFlows {
    * @param {Object} aibitat - The aibitat instance from the agent handler
    * @returns {Promise<Object>} Result of flow execution
    */
+  static permittedFlow(flow, ctx) {
+    const tenantId = flow?.config?.tenantId || flow?.tenantId;
+    return !tenantId || ctx?.identity === "platform" || tenantId === ctx?.tenantId;
+  }
+
   static async executeFlow(uuid, variables = {}, aibitat = null) {
     const flow = AgentFlows.loadFlow(uuid);
     if (!flow) throw new Error(`Flow ${uuid} not found`);
     const flowExecutor = new FlowExecutor();
+    const identity = aibitat?.handlerProps?.ctx || aibitat?.handlerProps?.context ||
+      require("../../enterprise/execution-context").executionContext();
+    await require("../../enterprise/auth").refreshContext(identity);
+    if (!AgentFlows.permittedFlow(flow, identity)) throw new Error("Flow belongs to another enterprise");
     return await flowExecutor.executeFlow(flow, variables, aibitat);
   }
 
@@ -185,10 +194,10 @@ class AgentFlows {
    * Get all active flows as plugins that can be loaded into the agent
    * @returns {string[]} Array of flow names in @@flow_{uuid} format
    */
-  static activeFlowPlugins() {
+  static activeFlowPlugins(ctx = null) {
     const flows = AgentFlows.getAllFlows();
     return Object.entries(flows)
-      .filter(([_, flow]) => flow.active !== false)
+      .filter(([_, flow]) => flow.active !== false && AgentFlows.permittedFlow(flow, ctx))
       .map(([uuid]) => `@@flow_${uuid}`);
   }
 

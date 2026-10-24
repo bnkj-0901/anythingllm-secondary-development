@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { Pinecone } = require("@pinecone-database/pinecone");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
@@ -8,6 +9,11 @@ const { sourceIdentifier } = require("../../chats");
 const { VectorDatabase } = require("../base");
 
 class PineconeDB extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -17,18 +23,18 @@ class PineconeDB extends VectorDatabase {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "pinecone")
+    if (env.VECTOR_DB !== "pinecone")
       throw new Error("Pinecone::Invalid ENV settings");
 
     const client = new Pinecone({
-      apiKey: process.env.PINECONE_API_KEY,
+      apiKey: env.PINECONE_API_KEY,
     });
 
-    const pineconeIndex = client.Index(process.env.PINECONE_INDEX);
-    const { status } = await client.describeIndex(process.env.PINECONE_INDEX);
+    const pineconeIndex = client.Index(env.PINECONE_INDEX);
+    const { status } = await client.describeIndex(env.PINECONE_INDEX);
 
     if (!status.ready) throw new Error("Pinecone::Index not ready.");
-    return { client, pineconeIndex, indexName: process.env.PINECONE_INDEX };
+    return { client, pineconeIndex, indexName: env.PINECONE_INDEX };
   }
 
   async totalVectors() {

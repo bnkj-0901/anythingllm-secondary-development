@@ -1,5 +1,5 @@
 const { v4: uuidv4 } = require("uuid");
-const { WorkspaceChats } = require("../../models/workspaceChats");
+const { Chat } = require("../../models/workspaceChats");
 const { resetMemory } = require("./commands/reset");
 const { generateImage } = require("./commands/img");
 const { convertToPromptHistory } = require("../helpers/chat/responses");
@@ -22,8 +22,10 @@ function isReservedCommand(command = "") {
   return Object.keys(VALID_COMMANDS).includes(String(command).toLowerCase());
 }
 
-async function grepCommand(message, user = null) {
-  const userPresets = await SlashCommandPresets.getUserPresets(user?.id);
+async function grepCommand(message, ctx = null, db = undefined) {
+  const userPresets = ctx
+    ? await SlashCommandPresets.getUserPresets(ctx, db)
+    : [];
   const availableCommands = Object.keys(VALID_COMMANDS);
 
   // Check if the message starts with any built-in command. Like the preset
@@ -57,11 +59,11 @@ async function grepCommand(message, user = null) {
 
 /**
  * @description This function will do recursive replacement of all slash commands with their corresponding prompts.
- * @notice This function is used for API calls and is not user-scoped. THIS FUNCTION DOES NOT SUPPORT PRESET COMMANDS.
+ * @notice API requests use the same executing user's presets as personal chat.
  * @returns {Promise<string>}
  */
-async function grepAllSlashCommands(message) {
-  const allPresets = await SlashCommandPresets.where({});
+async function grepAllSlashCommands(message, ctx) {
+  const allPresets = await SlashCommandPresets.where(ctx, {});
 
   // Replace all preset commands with their corresponding prompts
   // Allows multiple commands in one message
@@ -80,24 +82,13 @@ async function grepAllSlashCommands(message) {
   return updatedMessage;
 }
 
-async function recentChatHistory({
-  user = null,
-  workspace,
-  thread = null,
-  messageLimit = 20,
-  apiSessionId = null,
-}) {
+async function recentChatHistory({ ctx, threadId, messageLimit = 20, db }) {
   const rawHistory = (
-    await WorkspaceChats.where(
-      {
-        workspaceId: workspace.id,
-        user_id: user?.id || null,
-        thread_id: thread?.id || null,
-        api_session_id: apiSessionId || null,
-        include: true,
-      },
-      messageLimit,
-      { id: "desc" }
+    await Chat.forThread(
+      ctx,
+      threadId,
+      { include: true, limit: messageLimit, orderBy: { id: "desc" } },
+      db
     )
   ).reverse();
   return { rawHistory, chatHistory: convertToPromptHistory(rawHistory) };
@@ -114,30 +105,37 @@ async function recentChatHistory({
 /**
  * Returns the base prompt for the chat with memories appended (when enabled).
  * Also does variable substitution on the prompt if there are any defined variables.
- * @param {Object|null} workspace - the workspace object
- * @param {Object|null} user - the user object
+ * @param {Object|null} configuration - resolved tenant chat settings
+ * @param {Object|null} ctx - authenticated execution identity
  * @param {ChatPromptOptions} [opts]
  * @returns {Promise<string>}
  */
-async function chatPrompt(workspace, user = null, opts = {}) {
+async function chatPrompt(configuration, ctx = null, opts = {}) {
   const { SystemSettings } = require("../../models/systemSettings");
   const { promptWithMemories } = require("../memories");
   const basePrompt =
-    workspace?.openAiPrompt ?? SystemSettings.saneDefaultSystemPrompt;
-  const systemPrompt = await SystemPromptVariables.expandSystemPromptVariables(
-    basePrompt,
-    user?.id,
-    workspace?.id
-  );
+    configuration?.openAiPrompt ?? SystemSettings.saneDefaultSystemPrompt;
+  const systemPrompt =
+    opts.variablesExpanded === true
+      ? basePrompt
+      : await SystemPromptVariables.expandSystemPromptVariables(
+          basePrompt,
+          ctx?.userId,
+          { tenantId: ctx?.tenantId }
+        );
 
-  // Memories are scoped per-user, but in single-user mode they are stored with a
-  // null userId. Never inject them into anonymous/unauthenticated contexts.
-  if (opts.skipMemories === true) return systemPrompt;
+  // Anonymous publications and stateless API history have no personal memory.
+  if (
+    opts.skipMemories === true ||
+    !ctx?.tenantId ||
+    !ctx?.userId ||
+    ctx.identity === "embed"
+  )
+    return systemPrompt;
 
   return promptWithMemories({
     systemPrompt,
-    userId: user?.id ?? null,
-    workspaceId: workspace?.id,
+    ctx,
     prompt: opts.prompt ?? "",
     rawHistory: opts.rawHistory ?? [],
   });

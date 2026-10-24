@@ -1,142 +1,127 @@
-// Set required env vars before requiring modules
-process.env.STORAGE_DIR = __dirname;
-process.env.NODE_ENV = "test";
-
-const { SystemPromptVariables } = require("../../../models/systemPromptVariables");
-const { SystemSettings } = require("../../../models/systemSettings");
-const Provider = require("../../../utils/agents/aibitat/providers/ai-provider");
-
-jest.mock("../../../models/systemPromptVariables");
-jest.mock("../../../models/systemSettings");
-jest.mock("../../../utils/agents/imported", () => ({
-  activeImportedPlugins: jest.fn().mockReturnValue([]),
-}));
-jest.mock("../../../utils/agentFlows", () => ({
-  AgentFlows: {
-    activeFlowPlugins: jest.fn().mockReturnValue([]),
+process.env.STORAGE_DIR = require("os").tmpdir();
+jest.mock("../../../models/systemSettings", () => ({
+  SystemSettings: {
+    saneDefaultSystemPrompt: "Shared default prompt",
+    getValueOrFallback: jest.fn(),
+    tenantBridge: (value) => value,
   },
 }));
-jest.mock("../../../utils/MCP", () => {
-  return jest.fn().mockImplementation(() => ({
-    activeMCPServers: jest.fn().mockResolvedValue([]),
-  }));
-});
-
+jest.mock("../../../enterprise/settings", () => ({ defaultPrompt: jest.fn() }));
+jest.mock("../../../models/systemPromptVariables");
+jest.mock("../../../utils/memories", () => ({
+  promptWithMemories: jest.fn(async ({ systemPrompt }) => systemPrompt),
+}));
+jest.mock("../../../utils/agents/imported", () => ({
+  activeImportedPlugins: jest.fn(() => []),
+}));
+jest.mock("../../../utils/agentFlows", () => ({
+  AgentFlows: { activeFlowPlugins: jest.fn(() => []) },
+}));
+jest.mock("../../../utils/MCP", () =>
+  jest
+    .fn()
+    .mockImplementation(() => ({ activeMCPServers: jest.fn(async () => []) }))
+);
 const { WORKSPACE_AGENT } = require("../../../utils/agents/defaults");
-
-describe("WORKSPACE_AGENT.getDefinition", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    SystemPromptVariables.expandSystemPromptVariables.mockReset();
-    SystemPromptVariables.expandSystemPromptVariables.mockImplementation(
-      async (prompt) => prompt.replace("{datetime}", "January 1, 2024 12:00 PM")
-    );
-    // Mock SystemSettings to return empty arrays for agent skills
-    SystemSettings.getValueOrFallback = jest.fn().mockResolvedValue("[]");
-  });
-
-  it("should use saneDefaultSystemPrompt when workspace has no openAiPrompt", async () => {
-    const workspace = {
-      id: 1,
-      name: "Test Workspace",
-      openAiPrompt: null,
-    };
-    const user = { id: 1 };
-    const provider = "openai";
-    const expectedPrompt = await Provider.systemPrompt({ workspace, user });
+const { SystemSettings } = require("../../../models/systemSettings");
+const {
+  SystemPromptVariables,
+} = require("../../../models/systemPromptVariables");
+const { defaultPrompt } = require("../../../enterprise/settings");
+const { promptWithMemories } = require("../../../utils/memories");
+const ctx = { identity: "tenant", tenantId: "tenant-a", userId: "user-a" };
+beforeEach(() => {
+  jest.clearAllMocks();
+  SystemSettings.getValueOrFallback.mockResolvedValue("[]");
+  defaultPrompt.mockResolvedValue("Tenant default expanded prompt");
+  SystemPromptVariables.expandSystemPromptVariables.mockImplementation(
+    async (text) =>
+      text
+        .replace("{datetime}", "January 1, 2024 12:00 PM")
+        .replace("{user.name}", "John Doe")
+  );
+});
+describe("Agent definition with tenant configuration and personal identity", () => {
+  it("inherits the tenant default system prompt when no override is configured", async () => {
     const definition = await WORKSPACE_AGENT.getDefinition(
-      provider,
-      workspace,
-      user
+      "openai",
+      { openAiPrompt: null },
+      { id: ctx.userId },
+      "",
+      ctx
     );
-    expect(definition.role).toBe(expectedPrompt);
-    expect(SystemPromptVariables.expandSystemPromptVariables).toHaveBeenCalledWith(
-      SystemSettings.saneDefaultSystemPrompt,
-      user.id,
-      workspace.id
-    );
+    expect(defaultPrompt).toHaveBeenCalledWith(ctx);
+    expect(definition.role).toBe("Tenant default expanded prompt");
+    expect(promptWithMemories).toHaveBeenCalledWith({
+      systemPrompt: definition.role,
+      ctx,
+      prompt: "",
+    });
   });
-
-  it("should use workspace system prompt with variable expansion when openAiPrompt exists", async () => {
-    const workspace = {
-      id: 1,
-      name: "Test Workspace",
-      openAiPrompt: "You are a helpful assistant for {workspace.name}. The current user is {user.name}.",
+  it("expands a configured prompt against the current tenant user", async () => {
+    const configuration = {
+      openAiPrompt: "You help {user.name} at {datetime}",
     };
-    const user = { id: 1 };
-    const provider = "openai";
-
-    const expandedPrompt = "You are a helpful assistant for Test Workspace. The current user is John Doe.";
-    SystemPromptVariables.expandSystemPromptVariables.mockResolvedValue(expandedPrompt);
-
     const definition = await WORKSPACE_AGENT.getDefinition(
-      provider,
-      workspace,
-      user
+      "openai",
+      configuration,
+      { id: ctx.userId },
+      "Prepare report",
+      ctx
     );
-
-    expect(SystemPromptVariables.expandSystemPromptVariables).toHaveBeenCalledWith(
-      workspace.openAiPrompt,
-      user.id,
-      workspace.id
+    expect(
+      SystemPromptVariables.expandSystemPromptVariables
+    ).toHaveBeenCalledWith(configuration.openAiPrompt, ctx.userId, {
+      tenantId: ctx.tenantId,
+    });
+    expect(definition.role).toBe(
+      "You help John Doe at January 1, 2024 12:00 PM"
     );
-    expect(definition.role).toBe(expandedPrompt);
+    expect(promptWithMemories).toHaveBeenCalledWith({
+      systemPrompt: definition.role,
+      ctx,
+      prompt: "Prepare report",
+    });
   });
-
-  it("should handle workspace system prompt without user context", async () => {
-    const workspace = {
-      id: 1,
-      name: "Test Workspace",
-      openAiPrompt: "You are a helpful assistant. Today is {date}.",
-    };
-    const user = null;
-    const provider = "lmstudio";
-    const expandedPrompt = "You are a helpful assistant. Today is January 1, 2024.";
-    SystemPromptVariables.expandSystemPromptVariables.mockResolvedValue(expandedPrompt);
-
+  it("expands a configured prompt using its real identity when no redundant user object is supplied", async () => {
     const definition = await WORKSPACE_AGENT.getDefinition(
-      provider,
-      workspace,
-      user
-    );
-
-    expect(SystemPromptVariables.expandSystemPromptVariables).toHaveBeenCalledWith(
-      workspace.openAiPrompt,
+      "lmstudio",
+      { openAiPrompt: "Today is {datetime}" },
       null,
-      workspace.id
+      "",
+      ctx
     );
-    expect(definition.role).toBe(expandedPrompt);
+    expect(definition.role).toBe("Today is January 1, 2024 12:00 PM");
+    expect(
+      SystemPromptVariables.expandSystemPromptVariables
+    ).toHaveBeenCalledWith("Today is {datetime}", ctx.userId, {
+      tenantId: ctx.tenantId,
+    });
+    expect(promptWithMemories).toHaveBeenCalledWith(
+      expect.objectContaining({ ctx })
+    );
   });
-
-  it("should return functions array in definition", async () => {
-    const workspace = { id: 1, openAiPrompt: null };
-    const provider = "openai";
-
+  it("keeps the original function list and scopes Flow/MCP discovery to execution identity", async () => {
     const definition = await WORKSPACE_AGENT.getDefinition(
-      provider,
-      workspace,
-      null
+      "openai",
+      {},
+      null,
+      "",
+      ctx
     );
-
-    expect(definition).toHaveProperty("functions");
     expect(Array.isArray(definition.functions)).toBe(true);
+    expect(
+      require("../../../utils/agentFlows").AgentFlows.activeFlowPlugins
+    ).toHaveBeenCalledWith(ctx);
+    expect(
+      require("../../../utils/MCP").mock.results[0].value.activeMCPServers
+    ).toHaveBeenCalledWith(ctx);
   });
-
-  it("should use saneDefaultSystemPrompt for all providers when workspace has no openAiPrompt", async () => {
-    const workspace = { id: 1, openAiPrompt: null };
-    const user = null;
-    const provider = "lmstudio";
-    const definition = await WORKSPACE_AGENT.getDefinition(
-      provider,
-      workspace,
-      null
-    );
-
-    expect(definition.role).toBe(await Provider.systemPrompt({ workspace, user }));
-    expect(SystemPromptVariables.expandSystemPromptVariables).toHaveBeenCalledWith(
-      SystemSettings.saneDefaultSystemPrompt,
-      null,
-      workspace.id
-    );
+  it("refuses to build an Agent definition without a real execution identity", async () => {
+    await expect(
+      WORKSPACE_AGENT.getDefinition("lmstudio", null, null)
+    ).rejects.toMatchObject({ status: 401 });
+    expect(defaultPrompt).not.toHaveBeenCalled();
+    expect(promptWithMemories).not.toHaveBeenCalled();
   });
 });

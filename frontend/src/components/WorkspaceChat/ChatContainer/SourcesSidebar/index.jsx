@@ -13,12 +13,18 @@ import ChatSidebar, { useSourcesSidebar } from "../ChatSidebar";
 // Re-export for backward compat with existing imports
 export { useSourcesSidebar } from "../ChatSidebar";
 
-export default function SourcesSidebar() {
+export default function SourcesSidebar({ onSourceOpen }) {
   const { sources, sidebarOpen, closeSidebar } = useSourcesSidebar();
   const { t } = useTranslation();
   const [selectedSource, setSelectedSource] = useState(null);
 
   const combined = combineLikeSources(sources);
+  const selectSource = async (source) => {
+    const authorized = onSourceOpen
+      ? await onSourceOpen(source, sources)
+      : source;
+    if (authorized) setSelectedSource(authorized);
+  };
 
   if (isMobile) {
     return (
@@ -27,6 +33,7 @@ export default function SourcesSidebar() {
         isOpen={sidebarOpen}
         selectedSource={selectedSource}
         setSelectedSource={setSelectedSource}
+        onSourceSelect={selectSource}
         onClose={() => {
           setSelectedSource(null);
           closeSidebar();
@@ -59,7 +66,7 @@ export default function SourcesSidebar() {
               <SourceItem
                 key={source.title || idx}
                 source={source}
-                onClick={() => setSelectedSource(source)}
+                onClick={() => selectSource(source)}
               />
             ))}
           </div>

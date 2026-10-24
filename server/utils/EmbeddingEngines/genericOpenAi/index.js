@@ -1,4 +1,8 @@
 const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
+const {
   toChunks,
   maximumChunkLength,
   reportEmbeddingProgress,
@@ -6,18 +10,20 @@ const {
 
 class GenericOpenAiEmbedder {
   constructor() {
-    if (!process.env.EMBEDDING_BASE_PATH)
+    if (!env.EMBEDDING_BASE_PATH)
       throw new Error(
         "GenericOpenAI must have a valid base path to use for the api."
       );
     this.className = "GenericOpenAiEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.basePath = process.env.EMBEDDING_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.GENERIC_OPEN_AI_EMBEDDING_API_KEY ?? null,
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF ?? null;
+    this.basePath = env.EMBEDDING_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.GENERIC_OPEN_AI_EMBEDDING_API_KEY ?? null,
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF ?? null;
     this.embeddingMaxChunkLength = maximumChunkLength();
 
     // this.maxConcurrentChunks is delegated to the getter below.
@@ -42,12 +48,9 @@ class GenericOpenAiEmbedder {
    * @returns {number}
    */
   get apiRequestDelay() {
-    if (!("GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS" in process.env)) return null;
-    if (isNaN(Number(process.env.GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS)))
-      return null;
-    const delayTimeout = Number(
-      process.env.GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS
-    );
+    if (!("GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS" in env)) return null;
+    if (isNaN(Number(env.GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS))) return null;
+    const delayTimeout = Number(env.GENERIC_OPEN_AI_EMBEDDING_API_DELAY_MS);
     if (delayTimeout < 500) return 500; // minimum delay of 500ms
     return delayTimeout;
   }
@@ -68,13 +71,10 @@ class GenericOpenAiEmbedder {
    * @returns {number}
    */
   get maxConcurrentChunks() {
-    if (!process.env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS)
+    if (!env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS) return 500;
+    if (isNaN(Number(env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS)))
       return 500;
-    if (
-      isNaN(Number(process.env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS))
-    )
-      return 500;
-    return Number(process.env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS);
+    return Number(env.GENERIC_OPEN_AI_EMBEDDING_MAX_CONCURRENT_CHUNKS);
   }
 
   /**
@@ -85,11 +85,11 @@ class GenericOpenAiEmbedder {
    * @returns {string}
    */
   get embeddingPrefix() {
-    if (!("GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX" in process.env)) return "";
+    if (!("GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX" in env)) return "";
     this.log(
-      `Embedding prefix: \x1b[43m\x1b[30m${process.env.GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX}\x1b[0m`
+      `Embedding prefix: \x1b[43m\x1b[30m${env.GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX}\x1b[0m`
     );
-    return process.env.GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX;
+    return env.GENERIC_OPEN_AI_EMBEDDING_PASSAGE_PREFIX;
   }
 
   /**
@@ -99,11 +99,11 @@ class GenericOpenAiEmbedder {
    * @returns {string}
    */
   get queryPrefix() {
-    if (!("GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX" in process.env)) return "";
+    if (!("GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX" in env)) return "";
     this.log(
-      `Query prefix: \x1b[43m\x1b[30m${process.env.GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX}\x1b[0m`
+      `Query prefix: \x1b[43m\x1b[30m${env.GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX}\x1b[0m`
     );
-    return process.env.GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX;
+    return env.GENERIC_OPEN_AI_EMBEDDING_QUERY_PREFIX;
   }
 
   /**

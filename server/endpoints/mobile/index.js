@@ -1,12 +1,19 @@
-const { validatedRequest } = require("../../utils/middleware/validatedRequest");
+const {
+  authenticate: validatedRequest,
+  tenantId,
+} = require("../../utils/middleware/externalIdentity");
 const { MobileDevice } = require("../../models/mobileDevice");
 const { handleMobileCommand } = require("./utils");
 const { validDeviceToken, validRegistrationToken } = require("./middleware");
 const { reqBody } = require("../../utils/http");
-const {
-  flexUserRoleValid,
-  ROLES,
-} = require("../../utils/middleware/multiUserProtected");
+function deviceScope(request) {
+  if (request.ep.identity === "platform")
+    return request.query.tenantId ? { tenantId: tenantId(request) } : {};
+  return {
+    tenantId: request.ep.tenantId,
+    ...(request.ep.role === "admin" ? {} : { userId: request.ep.userId }),
+  };
+}
 
 function mobileEndpoints(app) {
   if (!app) return;
@@ -16,21 +23,22 @@ function mobileEndpoints(app) {
    * @param {import("express").Request} request
    * @param {import("express").Response} response
    */
-  app.get(
-    "/mobile/devices",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (_request, response) => {
-      try {
-        const devices = await MobileDevice.where({}, null, null, {
+  app.get("/mobile/devices", [validatedRequest], async (request, response) => {
+    try {
+      const devices = await MobileDevice.where(
+        deviceScope(request),
+        null,
+        null,
+        {
           user: { select: { id: true, username: true } },
-        });
-        return response.status(200).json({ devices });
-      } catch (e) {
-        console.error(e);
-        response.sendStatus(500).end();
-      }
+        }
+      );
+      return response.status(200).json({ devices });
+    } catch (e) {
+      console.error(e);
+      response.sendStatus(500).end();
     }
-  );
+  });
 
   /**
    * Updates the device status via an updates object.
@@ -39,10 +47,16 @@ function mobileEndpoints(app) {
    */
   app.post(
     "/mobile/update/:id",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    [validatedRequest],
     async (request, response) => {
       try {
         const body = reqBody(request);
+        const device = await MobileDevice.get({
+          id: Number(request.params.id),
+          ...deviceScope(request),
+        });
+        if (!device)
+          return response.status(404).json({ error: "Device not found" });
         const updates = await MobileDevice.update(
           Number(request.params.id),
           body
@@ -62,32 +76,36 @@ function mobileEndpoints(app) {
    * @param {import("express").Request} request
    * @param {import("express").Response} response
    */
-  app.delete(
-    "/mobile/:id",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (request, response) => {
-      try {
-        const device = await MobileDevice.get({
-          id: Number(request.params.id),
-        });
-        if (!device)
-          return response.status(404).json({ error: "Device not found" });
-        await MobileDevice.delete(device.id);
-        return response.status(200).json({ message: "Device deleted" });
-      } catch (e) {
-        console.error(e);
-        response.sendStatus(500).end();
-      }
+  app.delete("/mobile/:id", [validatedRequest], async (request, response) => {
+    try {
+      const device = await MobileDevice.get({
+        id: Number(request.params.id),
+        ...deviceScope(request),
+      });
+      if (!device)
+        return response.status(404).json({ error: "Device not found" });
+      await MobileDevice.delete(device.id);
+      return response.status(200).json({ message: "Device deleted" });
+    } catch (e) {
+      console.error(e);
+      response.sendStatus(500).end();
     }
-  );
+  });
 
   app.get(
     "/mobile/connect-info",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (_request, response) => {
+    [validatedRequest],
+    async (request, response) => {
       try {
+        if (request.ep.identity !== "tenant")
+          return response
+            .status(400)
+            .json({ error: "Use a tenant user to pair a device" });
         return response.status(200).json({
-          connectionUrl: MobileDevice.connectionURL(response.locals?.user),
+          connectionUrl: MobileDevice.connectionURL(
+            response.locals?.user,
+            `${request.protocol}://${request.get("host")}`
+          ),
         });
       } catch (e) {
         console.error(e);
@@ -127,7 +145,8 @@ function mobileEndpoints(app) {
         const result = await MobileDevice.create({
           deviceOs: body.deviceOs,
           deviceName: body.deviceName,
-          userId: response.locals?.user?.id,
+          userId: request.ep.userId,
+          tenantId: request.ep.tenantId,
         });
 
         if (result.error)
@@ -148,7 +167,7 @@ function mobileEndpoints(app) {
     [validDeviceToken],
     async (request, response) => {
       try {
-        return handleMobileCommand(request, response);
+        return await handleMobileCommand(request, response);
       } catch (e) {
         console.error(e);
         response.sendStatus(500).end();

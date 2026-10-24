@@ -1,3 +1,10 @@
+const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -18,18 +25,31 @@ const {
 //  hybrid of openAi LLM chat completion for LMStudio
 class LMStudioLLM {
   /** @see LMStudioLLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.LMSTUDIO_BASE_PATH)
+    if (!env.LMSTUDIO_BASE_PATH)
       throw new Error("No LMStudio API Base Path was set.");
 
     this.className = "LMStudioLLM";
-    const apiKey = process.env.LMSTUDIO_AUTH_TOKEN ?? null;
-    this.lmstudio = new OpenAIApi({
-      baseURL: parseLMStudioBasePath(process.env.LMSTUDIO_BASE_PATH), // here is the URL to your LMStudio instance
-      apiKey,
-    });
+    const apiKey = env.LMSTUDIO_AUTH_TOKEN ?? null;
+    this.lmstudio = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseLMStudioBasePath(env.LMSTUDIO_BASE_PATH), // here is the URL to your LMStudio instance
+        apiKey,
+      })
+    );
 
     // Prior to LMStudio 0.2.17 the `model` param was not required and you could pass anything
     // into that field and it would work. On 0.2.17 LMStudio introduced multi-model chat
@@ -37,7 +57,7 @@ class LMStudioLLM {
     // and any other value will crash inferencing. So until this is patched we will
     // try to fetch the `/models` and have the user set it, or just fallback to "Loaded from Chat UI"
     // which will not impact users with <v0.2.17 and should work as well once the bug is fixed.
-    this.model = modelPreference || process.env.LMSTUDIO_MODEL_PREF;
+    this.model = modelPreference || env.LMSTUDIO_MODEL_PREF;
     if (!this.model) throw new Error("LMStudio must have a valid model set.");
 
     this.embedder = embedder ?? new NativeEmbedder();
@@ -82,12 +102,10 @@ class LMStudioLLM {
       if (Object.keys(LMStudioLLM.modelContextWindows).length > 0 && !force)
         return;
 
-      const apiKey = process.env.LMSTUDIO_AUTH_TOKEN ?? null;
-      const endpoint = new URL(
-        parseLMStudioBasePath(process.env.LMSTUDIO_BASE_PATH)
-      );
+      const apiKey = env.LMSTUDIO_AUTH_TOKEN ?? null;
+      const endpoint = new URL(parseLMStudioBasePath(env.LMSTUDIO_BASE_PATH));
       endpoint.pathname = "/api/v0/models";
-      await fetch(endpoint.toString(), {
+      await scopedFetch(endpoint.toString(), {
         headers: {
           "Content-Type": "application/json",
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),
@@ -138,7 +156,7 @@ class LMStudioLLM {
       this.#slog(
         "No context windows cached - Context window may be inaccurately reported."
       );
-      return process.env.LMSTUDIO_MODEL_TOKEN_LIMIT || 16384;
+      return env.LMSTUDIO_MODEL_TOKEN_LIMIT || 16384;
     }
 
     let userDefinedLimit = null;
@@ -146,11 +164,11 @@ class LMStudioLLM {
       Number(this.modelContextWindows[modelName]) || 16384;
 
     if (
-      process.env.LMSTUDIO_MODEL_TOKEN_LIMIT &&
-      !isNaN(Number(process.env.LMSTUDIO_MODEL_TOKEN_LIMIT)) &&
-      Number(process.env.LMSTUDIO_MODEL_TOKEN_LIMIT) > 0
+      env.LMSTUDIO_MODEL_TOKEN_LIMIT &&
+      !isNaN(Number(env.LMSTUDIO_MODEL_TOKEN_LIMIT)) &&
+      Number(env.LMSTUDIO_MODEL_TOKEN_LIMIT) > 0
     )
-      userDefinedLimit = Number(process.env.LMSTUDIO_MODEL_TOKEN_LIMIT);
+      userDefinedLimit = Number(env.LMSTUDIO_MODEL_TOKEN_LIMIT);
 
     // The user defined limit is always higher priority than the context window limit, but it cannot be higher than the context window limit
     // so we return the minimum of the two, if there is no user defined limit, we return the system defined limit as-is.
@@ -309,12 +327,12 @@ class LMStudioLLM {
    */
   static async #getModelInfo(model) {
     const endpoint = new URL(
-      parseLMStudioBasePath(process.env.LMSTUDIO_BASE_PATH, "v1")
+      parseLMStudioBasePath(env.LMSTUDIO_BASE_PATH, "v1")
     );
-    const apiKey = process.env.LMSTUDIO_AUTH_TOKEN ?? null;
+    const apiKey = env.LMSTUDIO_AUTH_TOKEN ?? null;
     endpoint.pathname += "/models";
     return (
-      (await fetch(endpoint.toString(), {
+      (await scopedFetch(endpoint.toString(), {
         headers: {
           "Content-Type": "application/json",
           ...(apiKey ? { Authorization: `Bearer ${apiKey}` } : {}),

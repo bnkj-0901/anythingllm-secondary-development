@@ -11,7 +11,7 @@ import "react-loading-skeleton/dist/skeleton.css";
 import paths from "@/utils/paths";
 import useUser from "@/hooks/useUser";
 
-export default function WorkspaceAgentConfiguration({ workspace }) {
+export default function WorkspaceAgentConfiguration({ workspace, onUpdate }) {
   const { user } = useUser();
   const [settings, setSettings] = useState({});
   const [loading, setLoading] = useState(true);
@@ -49,6 +49,7 @@ export default function WorkspaceAgentConfiguration({ workspace }) {
       data.workspace[key] = castToType(key, value);
     }
 
+    if (onUpdate) return onUpdate(data.workspace);
     const { workspace: updatedWorkspace, message } = await Workspace.update(
       workspace.slug,
       data.workspace

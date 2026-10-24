@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -13,15 +17,17 @@ const {
 
 class ZAiLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.ZAI_API_KEY) throw new Error("No Z.AI API key was set.");
+    if (!env.ZAI_API_KEY) throw new Error("No Z.AI API key was set.");
     this.className = "ZAiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.z.ai/api/paas/v4",
-      apiKey: process.env.ZAI_API_KEY,
-    });
-    this.model = modelPreference || process.env.ZAI_MODEL_PREF || "glm-4.5";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.z.ai/api/paas/v4",
+        apiKey: env.ZAI_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.ZAI_MODEL_PREF || "glm-4.5";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

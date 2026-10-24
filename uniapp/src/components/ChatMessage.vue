@@ -104,7 +104,9 @@
           >
             <template #title="{ expanded }">
               <view class="source-heading">
-                <text class="source-number">{{ sourceIndex + 1 }}</text>
+                <text class="source-number">{{
+                  source.citationNumber || sourceIndex + 1
+                }}</text>
                 <text class="source-title">{{ source.title }}</text>
                 <wd-icon
                   :name="expanded ? 'arrow-up' : 'arrow-down'"

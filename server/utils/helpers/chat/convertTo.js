@@ -1,10 +1,9 @@
-// Helpers that convert workspace chats to some supported format
+// Helpers that convert authorized chats to some supported format
 // for external use by the user.
 
-const { WorkspaceChats } = require("../../../models/workspaceChats");
+const { Chat, chatScope } = require("../../../models/workspaceChats");
+const { ChatThread } = require("../../../models/workspaceThread");
 const { EmbedChats } = require("../../../models/embedChats");
-const { Workspace } = require("../../../models/workspace");
-const { EmbedConfig } = require("../../../models/embedConfig");
 const { safeJsonParse } = require("../../http");
 const { SystemSettings } = require("../../../models/systemSettings");
 
@@ -44,27 +43,87 @@ async function convertToJSONL(workspaceChatsMap) {
     .join("\n");
 }
 
-async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
+async function prepareChatsForExport(
+  format = "jsonl",
+  chatType = "personal",
+  ctx,
+  { threadId } = {}
+) {
   if (!exportMap.hasOwnProperty(format))
     throw new Error(`Invalid export type: ${format}`);
 
   let chats;
-  if (chatType === "workspace") {
-    chats = await WorkspaceChats.whereWithData({}, null, null, {
-      id: "asc",
-    });
+  if (chatType === "personal") {
+    chatScope(ctx);
+    const threads = await ChatThread.where(
+      ctx,
+      threadId ? { id: Number(threadId) } : {}
+    );
+    if (threadId && !threads.length)
+      throw Object.assign(new Error("对话不存在或无权访问"), { status: 404 });
+    const byId = new Map(threads.map((thread) => [thread.id, thread]));
+    const prompt = await tenantPrompt(ctx);
+    chats = (
+      await Chat.where(
+        ctx,
+        {
+          thread_id: { in: threads.map((thread) => thread.id) },
+        },
+        { orderBy: { id: "asc" } }
+      )
+    ).map((chat) => ({
+      ...chat,
+      exportGroupId: chat.thread_id,
+      conversationName:
+        byId.get(chat.thread_id)?.name || "unknown conversation",
+      systemPrompt: prompt,
+    }));
   } else if (chatType === "embed") {
-    chats = await EmbedChats.whereWithEmbedAndWorkspace(
-      {},
+    if (
+      ctx?.identity !== "platform" &&
+      (ctx?.identity !== "tenant" || ctx.role !== "admin" || !ctx.tenantId)
+    )
+      throw Object.assign(new Error("需要管理员权限"), { status: 403 });
+    chats = await EmbedChats.whereWithEmbedAndLibrary(
+      ctx.identity === "platform"
+        ? {}
+        : { embed_config: { tenantId: ctx.tenantId } },
       null,
       {
         id: "asc",
       },
       null
     );
+    const prompts = new Map();
+    chats = await Promise.all(
+      chats.map(async (chat) => {
+        const tenantId = chat.embed_config.tenantId;
+        if (!prompts.has(tenantId))
+          prompts.set(tenantId, tenantPrompt({ identity: "embed", tenantId }));
+        return {
+          ...chat,
+          exportGroupId: chat.embed_id,
+          conversationName:
+            chat.embed_config.library?.name || "unknown library",
+          systemPrompt: await prompts.get(tenantId),
+        };
+      })
+    );
   } else {
     throw new Error(`Invalid chat type: ${chatType}`);
   }
+
+  // Reserved Agent rows are not completed answers. Reset snapshots remain
+  // exportable, independently of whether they are used in model context.
+  chats = chats.filter((chat) => {
+    const response = safeJsonParse(chat.response, {});
+    return (
+      typeof chat.prompt === "string" &&
+      chat.prompt.trim() &&
+      typeof response?.text === "string" &&
+      response.text.trim()
+    );
+  });
 
   if (format === "csv" || format === "json") {
     const preparedData = chats.map((chat) => {
@@ -91,20 +150,19 @@ async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
       if (chatType === "embed") {
         return {
           ...baseData,
-          workspace: chat.embed_config
-            ? chat.embed_config.workspace.name
-            : "unknown workspace",
+          workspace: chat.conversationName,
         };
       }
 
       return {
         ...baseData,
-        workspace: chat.workspace ? chat.workspace.name : "unknown workspace",
-        username: chat.user
-          ? chat.user.username
-          : chat.api_session_id !== null
-            ? "API"
-            : "unknown user",
+        // Keep this legacy export column for consumers of the original format;
+        // its value is a personal conversation name, not a Workspace entity.
+        workspace: chat.conversationName,
+        username:
+          ctx.user?.username ||
+          ctx.username ||
+          (chat.api_session_id !== null ? "API" : "unknown user"),
         rating:
           chat.feedbackScore === null
             ? "--"
@@ -117,36 +175,12 @@ async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
     return preparedData;
   }
 
-  // Chat rows only carry the workspace name; look up its prompt and id once.
-  const workspaces = {};
-  const chatsWithWorkspace = [];
-  for (const chat of chats) {
-    const key = chatType === "embed" ? chat.embed_id : chat.workspaceId;
-    if (!(key in workspaces)) {
-      workspaces[key] =
-        chatType === "embed"
-          ? (await EmbedConfig.getWithWorkspace({ id: chat.embed_id }))
-              ?.workspace
-          : await Workspace.get({ id: chat.workspaceId });
-    }
-    const workspace = workspaces[key];
-    chatsWithWorkspace.push({
-      ...chat,
-      workspace,
-      workspaceId: workspace?.id ?? chat.workspaceId,
-    });
-  }
-  chats = chatsWithWorkspace;
-
   // jsonAlpaca format does not support array outputs
   if (format === "jsonAlpaca") {
     const preparedData = chats.map((chat) => {
       const responseJson = safeJsonParse(chat.response, {});
       return {
-        instruction: buildSystemPrompt(
-          chat,
-          chat.workspace ? chat.workspace.openAiPrompt : null
-        ),
+        instruction: buildSystemPrompt(chat, chat.systemPrompt),
         input: chat.prompt,
         output: responseJson.text,
       };
@@ -157,12 +191,12 @@ async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
 
   // Export to JSONL format (recommended for fine-tuning)
   const workspaceChatsMap = chats.reduce((acc, chat) => {
-    const { prompt, response, workspaceId } = chat;
+    const { prompt, response, exportGroupId } = chat;
     const responseJson = safeJsonParse(response, { attachments: [] });
     const attachments = responseJson.attachments;
 
-    if (!acc[workspaceId]) {
-      acc[workspaceId] = {
+    if (!acc[exportGroupId]) {
+      acc[exportGroupId] = {
         messages: [
           {
             role: "system",
@@ -170,8 +204,7 @@ async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
               {
                 type: "text",
                 text:
-                  chat.workspace?.openAiPrompt ??
-                  SystemSettings.saneDefaultSystemPrompt,
+                  chat.systemPrompt ?? SystemSettings.saneDefaultSystemPrompt,
               },
             ],
           },
@@ -179,7 +212,7 @@ async function prepareChatsForExport(format = "jsonl", chatType = "workspace") {
       };
     }
 
-    acc[workspaceId].messages.push(
+    acc[exportGroupId].messages.push(
       {
         role: "user",
         content: [
@@ -238,15 +271,29 @@ function escapeCsv(str) {
   return `"${str.replace(/"/g, '""').replace(/\n/g, " ")}"`;
 }
 
-async function exportChatsAsType(format = "jsonl", chatType = "workspace") {
+async function exportChatsAsType(
+  format = "jsonl",
+  chatType = "personal",
+  ctx,
+  options
+) {
   const { contentType, func } = exportMap.hasOwnProperty(format)
     ? exportMap[format]
     : exportMap.jsonl;
-  const chats = await prepareChatsForExport(format, chatType);
+  const chats = await prepareChatsForExport(format, chatType, ctx, options);
   return {
     contentType,
     data: await func(chats),
   };
+}
+
+async function tenantPrompt(ctx) {
+  const configuration =
+    await require("../../../enterprise/rag-settings").getSettings(ctx.tenantId);
+  return (
+    configuration.openAiPrompt ??
+    require("../../../enterprise/settings").defaultPrompt(ctx)
+  );
 }
 
 function buildSystemPrompt(chat, prompt = null) {

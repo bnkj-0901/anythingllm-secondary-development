@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -20,17 +24,19 @@ class PrivatemodeLLM {
   };
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.PRIVATEMODE_LLM_BASE_PATH)
+    if (!env.PRIVATEMODE_LLM_BASE_PATH)
       throw new Error("No Privatemode Base Path was set.");
 
     this.className = "PrivatemodeLLM";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.client = new OpenAIApi({
-      baseURL: PrivatemodeLLM.parseBasePath(),
-      apiKey: null,
-    });
+    this.client = new OpenAIApi(
+      sdkOptions({
+        baseURL: PrivatemodeLLM.parseBasePath(),
+        apiKey: null,
+      })
+    );
 
-    this.model = modelPreference || process.env.PRIVATEMODE_LLM_MODEL_PREF;
+    this.model = modelPreference || env.PRIVATEMODE_LLM_MODEL_PREF;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -49,9 +55,7 @@ class PrivatemodeLLM {
    * @param {string} providedBasePath
    * @returns {string}
    */
-  static parseBasePath(
-    providedBasePath = process.env.PRIVATEMODE_LLM_BASE_PATH
-  ) {
+  static parseBasePath(providedBasePath = env.PRIVATEMODE_LLM_BASE_PATH) {
     try {
       const baseURL = new URL(providedBasePath);
       const basePath = `${baseURL.origin}/v1`;

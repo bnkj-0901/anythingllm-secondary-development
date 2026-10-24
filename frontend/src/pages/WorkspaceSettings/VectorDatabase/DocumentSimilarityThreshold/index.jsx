@@ -20,6 +20,14 @@ export default function DocumentSimilarityThreshold({ workspace }) {
         className="border-none bg-theme-settings-input-bg text-white text-sm mt-2 rounded-lg focus:outline-primary-button active:outline-primary-button outline-none block w-full p-2.5"
         required={true}
       >
+        {workspace?.similarityThreshold != null &&
+          ![0, 0.25, 0.5, 0.75].includes(
+            Number(workspace.similarityThreshold)
+          ) && (
+            <option value={workspace.similarityThreshold}>
+              {workspace.similarityThreshold}
+            </option>
+          )}
         <option value={0.0}>{t("vector-workspace.doc.zero")}</option>
         <option value={0.25}>{t("vector-workspace.doc.low")}</option>
         <option value={0.5}>{t("vector-workspace.doc.medium")}</option>

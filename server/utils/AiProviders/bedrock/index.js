@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { OpenAI: OpenAIApi } = require("openai");
 const {
   handleDefaultStreamResponseV2,
@@ -77,15 +81,14 @@ class AWSBedrockLLM {
   }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.AWS_BEDROCK_LLM_API_KEY)
+    if (!env.AWS_BEDROCK_LLM_API_KEY)
       throw new Error("AWS_BEDROCK_LLM_API_KEY is required for AWS Bedrock.");
-    if (!process.env.AWS_BEDROCK_LLM_REGION)
+    if (!env.AWS_BEDROCK_LLM_REGION)
       throw new Error("AWS_BEDROCK_LLM_REGION is required for AWS Bedrock.");
 
     this.className = "AWSBedrockLLM";
-    this.model =
-      modelPreference || process.env.AWS_BEDROCK_LLM_MODEL_PREFERENCE;
-    this.region = process.env.AWS_BEDROCK_LLM_REGION;
+    this.model = modelPreference || env.AWS_BEDROCK_LLM_MODEL_PREFERENCE;
+    this.region = env.AWS_BEDROCK_LLM_REGION;
 
     const contextWindowLimit = this.promptWindowLimit();
     this.limits = {
@@ -94,18 +97,22 @@ class AWSBedrockLLM {
       user: Math.floor(contextWindowLimit * 0.7),
     };
 
-    this.openai = new OpenAIApi({
-      apiKey: process.env.AWS_BEDROCK_LLM_API_KEY,
-      baseURL: openaiBaseURL(this.region, this.model),
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.AWS_BEDROCK_LLM_API_KEY,
+        baseURL: openaiBaseURL(this.region, this.model),
+      })
+    );
 
     if (this.model?.includes("anthropic")) {
       const AnthropicAI = require("@anthropic-ai/sdk");
-      this.anthropic = new AnthropicAI({
-        apiKey: process.env.AWS_BEDROCK_LLM_API_KEY,
-        baseURL: anthropicBaseURL(this.region, this.model),
-        defaultHeaders: { "anthropic-version": "2023-06-01" },
-      });
+      this.anthropic = new AnthropicAI(
+        sdkOptions({
+          apiKey: env.AWS_BEDROCK_LLM_API_KEY,
+          baseURL: anthropicBaseURL(this.region, this.model),
+          defaultHeaders: { "anthropic-version": "2023-06-01" },
+        })
+      );
     }
 
     this.embedder = embedder ?? new NativeEmbedder();
@@ -127,7 +134,7 @@ class AWSBedrockLLM {
   }
 
   get #maxTokens() {
-    return Number(process.env.AWS_BEDROCK_LLM_MAX_TOKENS) || 4096;
+    return Number(env.AWS_BEDROCK_LLM_MAX_TOKENS) || 4096;
   }
 
   temperatureParam(temperature = this.temperature) {
@@ -154,12 +161,12 @@ class AWSBedrockLLM {
   }
 
   streamingEnabled() {
-    if (!!process.env.AWS_BEDROCK_STREAMING_DISABLED) return false;
+    if (!!env.AWS_BEDROCK_STREAMING_DISABLED) return false;
     return "streamGetChatCompletion" in this;
   }
 
   static promptWindowLimit() {
-    const limit = process.env.AWS_BEDROCK_LLM_MODEL_TOKEN_LIMIT ?? 8191;
+    const limit = env.AWS_BEDROCK_LLM_MODEL_TOKEN_LIMIT ?? 8191;
     const numericLimit = Number(limit);
     if (isNaN(numericLimit) || numericLimit <= 0) {
       this.#slog(

@@ -18,7 +18,7 @@ function previousSidebarState() {
   return true;
 }
 
-export function useSidebarToggle() {
+export function useSidebarToggle({ enabled } = {}) {
   const [showSidebar, setShowSidebar] = useState(previousSidebarState());
   const [canToggleSidebar, setCanToggleSidebar] = useState(true);
 
@@ -29,10 +29,10 @@ export function useSidebarToggle() {
         currentPath === paths.home() ||
         /^\/workspace\/[^\/]+$/.test(currentPath) ||
         /^\/workspace\/[^\/]+\/t\/[^\/]+$/.test(currentPath);
-      setCanToggleSidebar(isVisible);
+      setCanToggleSidebar(enabled ?? isVisible);
     }
     checkPath();
-  }, [window.location.pathname]);
+  }, [window.location.pathname, enabled]);
 
   useEffect(() => {
     function toggleSidebar(e) {

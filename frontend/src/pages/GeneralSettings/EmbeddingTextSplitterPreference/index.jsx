@@ -195,7 +195,7 @@ export default function EmbeddingTextSplitterPreference() {
 
       <Modal isOpen={isOpen} onClose={closeModal} size="lg">
         <ChangeWarningModal
-          warningText="Changing text splitter settings will clear any previously cached documents.\n\nThese new settings will be applied to all documents when embedding them into a workspace."
+          warningText="These settings apply to future uploads and document re-indexing.\n\nExisting document chunks remain available until you re-index the documents in Knowledge management."
           onClose={closeModal}
           onConfirm={handleSaveSettings}
         />

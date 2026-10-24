@@ -11,9 +11,9 @@
           </view>
           <text class="upload-empty__title">选择你的文件</text>
           <text class="upload-empty__description">{{
-            workspaceSlug
-              ? "每次最多选择 5 个文件，上传后自动解析并加入当前工作区。"
-              : "请先通过顶部菜单选择工作区，再上传资料。"
+            libraryId
+              ? "每次最多选择 5 个文件，上传后自动解析并加入当前知识库。"
+              : "请先选择目标知识库，再上传资料。"
           }}</text>
         </view>
 
@@ -32,7 +32,9 @@
             </view>
             <view class="upload-file__details">
               <text class="upload-file__name">{{ file.name }}</text>
-              <text class="upload-file__size">{{ formatFileSize(file.size) }}</text>
+              <text class="upload-file__size">{{
+                formatFileSize(file.size)
+              }}</text>
               <text class="upload-file__state" :class="`is-${file.status}`">{{
                 fileStatus(file)
               }}</text>
@@ -42,7 +44,9 @@
                   :style="{ width: `${file.progress}%` }"
                 />
               </view>
-              <text v-if="file.error" class="upload-file__error">{{ file.error }}</text>
+              <text v-if="file.error" class="upload-file__error">{{
+                file.error
+              }}</text>
             </view>
             <view class="upload-file__actions">
               <wd-button
@@ -51,7 +55,8 @@
                 size="small"
                 :disabled="locked"
                 @click="uploadFiles(file.id)"
-              >重试</wd-button>
+                >重试</wd-button
+              >
               <wd-button
                 type="icon"
                 icon="close"
@@ -63,13 +68,16 @@
             </view>
           </view>
           <view v-if="completedCount" class="upload-complete">
-            <text class="upload-complete__title">{{ completedCount }} 个文件已可用于问答</text>
+            <text class="upload-complete__title"
+              >{{ completedNotice }}</text
+            >
             <wd-button
               type="text"
               size="small"
               :disabled="locked"
               @click="emit('chat')"
-            >切回对话</wd-button>
+              >切回对话</wd-button
+            >
           </view>
           <text class="upload-status">{{ queueNotice }}</text>
         </view>
@@ -78,9 +86,9 @@
 
     <view class="upload-action-region">
       <view class="upload-action-region__content">
-        <view v-if="workspaceName" class="upload-workspace">
+        <view v-if="libraryName" class="upload-workspace">
           <wd-icon name="folder-open" size="14px" color="#8a9690" />
-          <text>{{ workspaceName }}</text>
+          <text>{{ libraryName }}</text>
         </view>
         <wd-button
           block
@@ -88,7 +96,7 @@
           :round="false"
           :plain="files.length > 0"
           :loading="choosing"
-          :disabled="locked || !workspaceSlug || files.length >= maxFiles"
+          :disabled="locked || !libraryId || files.length >= maxFiles"
           custom-class="upload-select-button"
           custom-style="height:46px;border-radius:12px;font-size:15px;font-weight:600;"
           @click="chooseFiles"
@@ -100,24 +108,27 @@
           block
           :round="false"
           :loading="uploading"
-          :disabled="disabled || choosing || uploading || !workspaceSlug"
+          :disabled="disabled || choosing || uploading || !libraryId"
           custom-style="height:46px;margin-top:10px;border-radius:12px;font-size:15px;font-weight:600;"
           @click="uploadFiles()"
-        >{{ uploadButtonText }}</wd-button>
+          >{{ uploadButtonText }}</wd-button
+        >
       </view>
     </view>
   </view>
 </template>
 
 <script setup>
-import { computed, markRaw, onUnmounted, ref, watch } from "vue";
-import { uploadAndEmbed } from "@/services/chat";
+import { computed, inject, markRaw, onUnmounted, ref, watch } from "vue";
+import { uploadKnowledgeFile } from "@/services/knowledgeUpload.mjs";
 
 defineOptions({ options: { virtualHost: true, styleIsolation: "shared" } });
 
+const api = inject("enterprise-api");
 const props = defineProps({
-  workspaceSlug: { type: String, default: "" },
-  workspaceName: { type: String, default: "" },
+  fileTypes: { type: Object, default: null },
+  libraryId: { type: String, default: "" },
+  libraryName: { type: String, default: "" },
   disabled: { type: Boolean, default: false },
 });
 const emit = defineEmits(["busy-change", "uploaded", "chat"]);
@@ -128,8 +139,25 @@ const choosing = ref(false);
 const uploading = ref(false);
 const busy = computed(() => choosing.value || uploading.value);
 const locked = computed(() => props.disabled || busy.value);
-const completedCount = computed(() => files.value.filter((file) => file.status === "success").length);
-const readyCount = computed(() => files.value.filter((file) => file.status === "pending" || file.status === "error").length);
+const completedCount = computed(
+  () => files.value.filter((file) => file.status === "success").length
+);
+const approvalCount = computed(
+  () => files.value.filter((file) => file.status === "success" && file.approvalRequired).length
+);
+const completedNotice = computed(() => {
+  const ready = completedCount.value - approvalCount.value;
+  const notices = [];
+  if (ready) notices.push(`${ready} 个文件已可用于问答`);
+  if (approvalCount.value) notices.push(`${approvalCount.value} 个文件等待管理员审批`);
+  return notices.join("，");
+});
+const readyCount = computed(
+  () =>
+    files.value.filter(
+      (file) => file.status === "pending" || file.status === "error"
+    ).length
+);
 const uploadButtonText = computed(() => {
   if (uploading.value) return "正在上传并处理，请稍候";
   const pending = files.value.some((file) => file.status === "pending");
@@ -139,9 +167,12 @@ const uploadButtonText = computed(() => {
   return `开始上传（${readyCount.value}）`;
 });
 const queueNotice = computed(() => {
-  if (uploading.value) return "文件将依次上传。上传完成后仍需解析和索引，请等待“可用于问答”。";
-  if (files.value.some((file) => file.status === "error")) return "失败文件保留在列表中，可单独重试或批量重试。";
-  if (completedCount.value) return "从列表移除仅清理本页记录，已上传资料仍保留在工作区。";
+  if (uploading.value)
+    return "文件将依次上传。上传完成后仍需解析和索引，请等待“可用于问答”。";
+  if (files.value.some((file) => file.status === "error"))
+    return "失败文件保留在列表中，可单独重试或批量重试。";
+  if (completedCount.value)
+    return "从列表移除仅清理本页记录，已上传资料仍保留在知识库。";
   return "文件尚未上传，点击“开始上传”后会自动解析并建立索引。";
 });
 let nextFileId = 0;
@@ -150,7 +181,7 @@ let activeRequest = null;
 let disposed = false;
 
 watch(busy, (value) => emit("busy-change", value), { flush: "sync" });
-watch(() => props.workspaceSlug, resetQueue);
+watch(() => props.libraryId, resetQueue);
 onUnmounted(() => {
   disposed = true;
   resetQueue();
@@ -163,12 +194,22 @@ function showNotice(title) {
 
 function addFiles(result) {
   const selected = result.tempFiles || [];
+  let invalidCount = 0;
   let overflowCount = 0;
 
   for (const file of selected) {
     const path = file.path || file.tempFilePath || "";
     const name = file.name || path.split(/[\\/]/).pop() || "未命名文件";
     const size = Math.max(0, Number(file.size) || 0);
+    const extension = name.match(/\.[a-z0-9]+$/i)?.[0].toLowerCase();
+    if (
+      !props.fileTypes?.extensions.includes(extension) ||
+      !size ||
+      size > props.fileTypes.maxFileSizeBytes
+    ) {
+      invalidCount += 1;
+      continue;
+    }
     if (files.value.length >= maxFiles) {
       overflowCount += 1;
       continue;
@@ -185,6 +226,7 @@ function addFiles(result) {
     });
   }
 
+  if (invalidCount) showNotice("部分文件格式或大小不符合服务要求");
   if (overflowCount) showNotice(`最多选择 ${maxFiles} 个文件`);
 }
 
@@ -195,7 +237,7 @@ function onChooseError(error) {
 }
 
 function chooseFiles() {
-  if (locked.value || !props.workspaceSlug) return;
+  if (locked.value || !props.libraryId || !props.fileTypes) return;
   const remaining = maxFiles - files.value.length;
   if (remaining <= 0) {
     showNotice(`最多选择 ${maxFiles} 个文件，请先移除文件`);
@@ -204,12 +246,17 @@ function chooseFiles() {
 
   choosing.value = true;
   const version = contextVersion;
-  const workspaceSlug = props.workspaceSlug;
-  const isCurrent = () => !disposed && contextVersion === version && props.workspaceSlug === workspaceSlug;
+  const libraryId = props.libraryId;
+  const isCurrent = () =>
+    !disposed && contextVersion === version && props.libraryId === libraryId;
   const options = {
     count: remaining,
-    success: (result) => { if (isCurrent()) addFiles(result); },
-    fail: (error) => { if (isCurrent()) onChooseError(error); },
+    success: (result) => {
+      if (isCurrent()) addFiles(result);
+    },
+    fail: (error) => {
+      if (isCurrent()) onChooseError(error);
+    },
     complete: () => {
       if (isCurrent()) choosing.value = false;
     },
@@ -217,10 +264,18 @@ function chooseFiles() {
 
   try {
     // #ifdef MP-WEIXIN
-    uni.chooseMessageFile({ ...options, type: "file" });
+    uni.chooseMessageFile({
+      ...options,
+      type: "file",
+      extension: props.fileTypes.extensions.map((value) => value.slice(1)),
+    });
     // #endif
     // #ifdef H5
-    uni.chooseFile({ ...options, type: "all" });
+    uni.chooseFile({
+      ...options,
+      type: "all",
+      extension: props.fileTypes.extensions,
+    });
     // #endif
     // #ifndef MP-WEIXIN || H5
     choosing.value = false;
@@ -241,39 +296,52 @@ function removeFile(id) {
 function fileStatus(file) {
   if (file.status === "uploading") return `上传中 ${file.progress}%`;
   if (file.status === "processing") return "正在解析并建立索引…";
-  if (file.status === "success") return "可用于问答";
+  if (file.status === "success") return file.approvalRequired ? "等待管理员审批" : "可用于问答";
   if (file.status === "error") return "上传或处理失败";
   return "待上传";
 }
 
 async function uploadFiles(onlyId) {
-  if (locked.value || !props.workspaceSlug) return;
-  const queue = files.value.filter((file) =>
-    (onlyId === undefined || file.id === onlyId) &&
-    (file.status === "pending" || file.status === "error")
+  if (locked.value || !props.libraryId) return;
+  const queue = files.value.filter(
+    (file) =>
+      (onlyId === undefined || file.id === onlyId) &&
+      (file.status === "pending" || file.status === "error")
   );
   if (!queue.length) return;
 
   const version = contextVersion;
-  const workspaceSlug = props.workspaceSlug;
+  const libraryId = props.libraryId;
   const completed = [];
-  const isCurrent = () => !disposed && contextVersion === version && props.workspaceSlug === workspaceSlug;
+  const isCurrent = () =>
+    !disposed && contextVersion === version && props.libraryId === libraryId;
   uploading.value = true;
 
   try {
-    // Collector uses a shared hot directory. Process this queue sequentially.
+    // Keep per-file progress and retry state while indexing sequentially.
     for (const file of queue) {
       if (!isCurrent()) break;
       file.status = "uploading";
       file.progress = 0;
       file.error = "";
       try {
-        const request = uploadAndEmbed({
-          workspaceSlug,
+        const request = uploadKnowledgeFile({
+          api,
+          libraryId,
+          onDocument(id) {
+            if (isCurrent()) {
+              file.documentId = id;
+              file.progress = 100;
+              file.status = "processing";
+            }
+          },
           file,
           onProgress(event) {
             if (!isCurrent()) return;
-            file.progress = Math.min(100, Math.max(0, Math.round(Number(event?.progress) || 0)));
+            file.progress = Math.min(
+              100,
+              Math.max(0, Math.round(Number(event?.progress) || 0))
+            );
             // Transport completion is not index completion.
             file.status = file.progress >= 100 ? "processing" : "uploading";
           },
@@ -288,6 +356,7 @@ async function uploadFiles(onlyId) {
         }
         file.progress = 100;
         file.status = "success";
+        file.approvalRequired = result.approvalRequired === true;
         completed.push({ id: file.id, name: file.name, result });
       } catch (error) {
         if (!isCurrent()) break;
@@ -300,7 +369,12 @@ async function uploadFiles(onlyId) {
   } finally {
     if (isCurrent()) {
       uploading.value = false;
-      if (completed.length) emit("uploaded", { workspaceSlug, count: completed.length, files: completed });
+      if (completed.length)
+        emit("uploaded", {
+          libraryId,
+          count: completed.length,
+          files: completed,
+        });
     }
   }
 }

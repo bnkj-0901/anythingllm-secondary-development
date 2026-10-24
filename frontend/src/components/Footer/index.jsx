@@ -30,7 +30,7 @@ export const ICON_COMPONENTS = {
   Info: Info,
 };
 
-export default function Footer() {
+export default function Footer({ onNavigate, showSettings = !isMobile } = {}) {
   const [footerData, setFooterData] = useState(false);
 
   useEffect(() => {
@@ -97,7 +97,7 @@ export default function Footer() {
               />
             </Link>
           </div>
-          {!isMobile && <SettingsButton />}
+          {showSettings && <SettingsButton onNavigate={onNavigate} />}
         </div>
         <Tooltip
           id="footer-item"
@@ -130,7 +130,7 @@ export default function Footer() {
             )}
           </a>
         ))}
-        {!isMobile && <SettingsButton />}
+        {showSettings && <SettingsButton onNavigate={onNavigate} />}
       </div>
       <Tooltip
         id="footer-item"

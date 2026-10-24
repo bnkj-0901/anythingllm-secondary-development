@@ -1,6 +1,7 @@
 const { reqBody } = require("../utils/http");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
 const { pushNotificationService } = require("../utils/PushNotifications");
+const { wrap } = require("../utils/middleware/externalIdentity");
 
 function webPushEndpoints(app) {
   if (!app) return;
@@ -8,14 +9,14 @@ function webPushEndpoints(app) {
   app.post(
     "/web-push/subscribe",
     [validatedRequest],
-    async (request, response) => {
+    wrap(async (request, response) => {
       const subscription = reqBody(request);
       await pushNotificationService.registerSubscription(
-        response.locals.user,
+        request.ep,
         subscription
       );
       response.status(201).json({});
-    }
+    })
   );
 
   app.get("/web-push/pubkey", [validatedRequest], (_request, response) => {

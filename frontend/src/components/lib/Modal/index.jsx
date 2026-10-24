@@ -194,6 +194,7 @@ export function ModalHint({ children, className = "" }) {
  * @param {string} [props.className] - Extra classes appended to the input
  */
 export function ModalInput({
+  as: Component = "input",
   label,
   hint,
   optional,
@@ -225,7 +226,7 @@ export function ModalInput({
             {...props}
           />
         ) : (
-          <input
+          <Component
             id={inputId}
             name={name}
             className={`${FIELD_BASE} h-[34px] px-3.5 ${leading ? "pl-7" : ""} ${className}`}

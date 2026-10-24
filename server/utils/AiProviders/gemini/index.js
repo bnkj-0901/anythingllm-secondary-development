@@ -1,3 +1,9 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const fs = require("fs");
 const path = require("path");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
@@ -18,11 +24,12 @@ const {
   modelsDevReasoningCapabilities,
   reasoningParams,
 } = require("../../helpers/reasoningEffort");
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "gemini")
     : path.resolve(__dirname, `../../../storage/models/gemini`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 const NO_SYSTEM_PROMPT_MODELS = [
   "gemma-3-1b-it",
@@ -42,22 +49,21 @@ class GeminiLLM {
   }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.GEMINI_API_KEY)
-      throw new Error("No Gemini API key was set.");
+    if (!env.GEMINI_API_KEY) throw new Error("No Gemini API key was set.");
 
     this.className = "GeminiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.model =
-      modelPreference ||
-      process.env.GEMINI_LLM_MODEL_PREF ||
-      "gemini-2.0-flash-lite";
+      modelPreference || env.GEMINI_LLM_MODEL_PREF || "gemini-2.0-flash-lite";
 
     const isExperimental = this.isExperimentalModel(this.model);
-    this.openai = new OpenAIApi({
-      apiKey: process.env.GEMINI_API_KEY,
-      // Even models that are v1 in gemini API can be used with v1beta/openai/ endpoint and nobody knows why.
-      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.GEMINI_API_KEY,
+        // Even models that are v1 in gemini API can be used with v1beta/openai/ endpoint and nobody knows why.
+        baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+      })
+    );
 
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
@@ -67,10 +73,10 @@ class GeminiLLM {
 
     this.embedder = embedder ?? new NativeEmbedder();
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
     this.#log(
       `Initialized with model: ${this.model} ${isExperimental ? "[Experimental v1beta]" : "[Stable v1]"} - ctx: ${this.promptWindowLimit()}`
     );
@@ -95,10 +101,10 @@ class GeminiLLM {
   // to date.
   static cacheIsStale() {
     const MAX_STALE = 8.64e7; // 1 day in MS
-    if (!fs.existsSync(path.resolve(cacheFolder, ".cached_at"))) return true;
+    if (!fs.existsSync(path.resolve(cacheFolder(), ".cached_at"))) return true;
     const now = Number(new Date());
     const timestampMs = Number(
-      fs.readFileSync(path.resolve(cacheFolder, ".cached_at"))
+      fs.readFileSync(path.resolve(cacheFolder(), ".cached_at"))
     );
     return now - timestampMs > MAX_STALE;
   }
@@ -121,7 +127,7 @@ class GeminiLLM {
 
   static promptWindowLimit(modelName) {
     try {
-      const cacheModelPath = path.resolve(cacheFolder, "models.json");
+      const cacheModelPath = path.resolve(cacheFolder(), "models.json");
       if (!fs.existsSync(cacheModelPath))
         return MODEL_MAP.get("gemini", modelName) ?? 30_720;
 
@@ -163,11 +169,11 @@ class GeminiLLM {
    */
   isExperimentalModel(modelName) {
     if (
-      fs.existsSync(cacheFolder) &&
-      fs.existsSync(path.resolve(cacheFolder, "models.json"))
+      fs.existsSync(cacheFolder()) &&
+      fs.existsSync(path.resolve(cacheFolder(), "models.json"))
     ) {
       const models = safeJsonParse(
-        fs.readFileSync(path.resolve(cacheFolder, "models.json"))
+        fs.readFileSync(path.resolve(cacheFolder(), "models.json"))
       );
       const model = models.find((model) => model.id === modelName);
       if (!model) return false;
@@ -186,12 +192,12 @@ class GeminiLLM {
    */
   static async fetchModels(apiKey, limit = 1_000, pageToken = null) {
     if (!apiKey) return [];
-    if (fs.existsSync(cacheFolder) && !this.cacheIsStale()) {
+    if (fs.existsSync(cacheFolder()) && !this.cacheIsStale()) {
       console.log(
         `\x1b[32m[GeminiLLM]\x1b[0m Using cached models API response.`
       );
       return safeJsonParse(
-        fs.readFileSync(path.resolve(cacheFolder, "models.json"))
+        fs.readFileSync(path.resolve(cacheFolder(), "models.json"))
       );
     }
 
@@ -206,7 +212,7 @@ class GeminiLLM {
       url.searchParams.set("pageSize", limit);
       url.searchParams.set("key", apiKey);
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      await fetch(url.toString(), {
+      await scopedFetch(url.toString(), {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       })
@@ -254,7 +260,7 @@ class GeminiLLM {
       url.searchParams.set("pageSize", limit);
       url.searchParams.set("key", apiKey);
       if (pageToken) url.searchParams.set("pageToken", pageToken);
-      await fetch(url.toString(), {
+      await scopedFetch(url.toString(), {
         method: "GET",
         headers: { "Content-Type": "application/json" },
       })
@@ -302,14 +308,14 @@ class GeminiLLM {
     console.log(
       `\x1b[32m[GeminiLLM]\x1b[0m Writing cached models API response to disk.`
     );
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
     fs.writeFileSync(
-      path.resolve(cacheFolder, "models.json"),
+      path.resolve(cacheFolder(), "models.json"),
       JSON.stringify(allModels)
     );
     fs.writeFileSync(
-      path.resolve(cacheFolder, ".cached_at"),
+      path.resolve(cacheFolder(), ".cached_at"),
       new Date().getTime().toString()
     );
 
@@ -323,7 +329,7 @@ class GeminiLLM {
    * @returns {Promise<boolean>} A promise that resolves to a boolean indicating if the model is valid
    */
   async isValidChatCompletionModel(modelName = "") {
-    const models = await this.fetchModels(process.env.GEMINI_API_KEY);
+    const models = await this.fetchModels(env.GEMINI_API_KEY);
     return models.some((model) => model.id === modelName);
   }
 

@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { v4: uuidv4 } = require("uuid");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { isAbortError } = require("../../helpers/abortSignals");
@@ -21,15 +25,16 @@ const {
 
 class OpenAiLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.OPEN_AI_KEY) throw new Error("No OpenAI API key was set.");
+    if (!env.OPEN_AI_KEY) throw new Error("No OpenAI API key was set.");
     this.className = "OpenAiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
 
-    this.openai = new OpenAIApi({
-      apiKey: process.env.OPEN_AI_KEY,
-    });
-    this.model =
-      modelPreference || process.env.OPEN_MODEL_PREF || "gpt-4.1-nano";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.OPEN_AI_KEY,
+      })
+    );
+    this.model = modelPreference || env.OPEN_MODEL_PREF || "gpt-4.1-nano";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

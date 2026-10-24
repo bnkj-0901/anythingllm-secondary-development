@@ -11,7 +11,7 @@ import showToast from "@/utils/toast";
 import { Warning } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
 
-export default function DrupalWikiOptions() {
+export default function DrupalWikiOptions({ onImport } = {}) {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -28,7 +28,9 @@ export default function DrupalWikiOptions() {
           autoClose: false,
         }
       );
-      const { data, error } = await System.dataConnectors.drupalwiki.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.drupalwiki.collect
+      )({
         baseUrl: form.get("baseUrl"),
         spaceIds: form.get("spaceIds"),
         accessToken: form.get("accessToken"),
@@ -36,6 +38,12 @@ export default function DrupalWikiOptions() {
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

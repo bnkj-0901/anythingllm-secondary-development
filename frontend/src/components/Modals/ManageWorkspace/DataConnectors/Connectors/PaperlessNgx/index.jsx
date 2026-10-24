@@ -3,7 +3,7 @@ import System from "@/models/system";
 import showToast from "@/utils/toast";
 import { Info } from "@phosphor-icons/react";
 
-export default function PaperlessNgxOptions() {
+export default function PaperlessNgxOptions({ onImport } = {}) {
   const [loading, setLoading] = useState(false);
 
   const handleSubmit = async (e) => {
@@ -18,13 +18,21 @@ export default function PaperlessNgxOptions() {
         { clear: true, autoClose: false }
       );
 
-      const { data, error } = await System.dataConnectors.paperlessNgx.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.paperlessNgx.collect
+      )({
         baseUrl: form.get("baseUrl"),
         apiToken: form.get("apiToken"),
       });
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

@@ -1,3 +1,8 @@
+const {
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -18,21 +23,23 @@ const {
 
 class LemonadeLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.LEMONADE_LLM_BASE_PATH)
+    if (!env.LEMONADE_LLM_BASE_PATH)
       throw new Error("No Lemonade API Base Path was set.");
-    if (!process.env.LEMONADE_LLM_MODEL_PREF && !modelPreference)
+    if (!env.LEMONADE_LLM_MODEL_PREF && !modelPreference)
       throw new Error("No Lemonade Model Pref was set.");
 
     this.className = "LemonadeLLM";
-    this.lemonade = new OpenAIApi({
-      baseURL: parseLemonadeServerEndpoint(
-        process.env.LEMONADE_LLM_BASE_PATH,
-        "openai"
-      ),
-      apiKey: process.env.LEMONADE_LLM_API_KEY || null,
-    });
+    this.lemonade = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseLemonadeServerEndpoint(
+          env.LEMONADE_LLM_BASE_PATH,
+          "openai"
+        ),
+        apiKey: env.LEMONADE_LLM_API_KEY || null,
+      })
+    );
 
-    this.model = modelPreference || process.env.LEMONADE_LLM_MODEL_PREF;
+    this.model = modelPreference || env.LEMONADE_LLM_MODEL_PREF;
     this.embedder = embedder ?? new NativeEmbedder();
 
     // We can establish here since we cannot dynamically curl the context window limit from the API.
@@ -82,7 +89,7 @@ class LemonadeLLM {
 
   /** Lemonade does not support curling the context window limit from the API, so we return the system defined limit. */
   static promptWindowLimit(_) {
-    return Number(process.env.LEMONADE_LLM_MODEL_TOKEN_LIMIT) || 8192;
+    return Number(env.LEMONADE_LLM_MODEL_TOKEN_LIMIT) || 8192;
   }
 
   promptWindowLimit() {
@@ -227,13 +234,15 @@ class LemonadeLLM {
    */
   async getModelCapabilities() {
     try {
-      const client = new OpenAIApi({
-        baseURL: parseLemonadeServerEndpoint(
-          process.env.LEMONADE_LLM_BASE_PATH,
-          "openai"
-        ),
-        apiKey: process.env.LEMONADE_LLM_API_KEY || null,
-      });
+      const client = new OpenAIApi(
+        sdkOptions({
+          baseURL: parseLemonadeServerEndpoint(
+            env.LEMONADE_LLM_BASE_PATH,
+            "openai"
+          ),
+          apiKey: env.LEMONADE_LLM_API_KEY || null,
+        })
+      );
 
       const { labels = [] } = await client.models.retrieve(this.model);
       const supportsReasoning = labels.includes("reasoning");
@@ -264,14 +273,14 @@ class LemonadeLLM {
    */
   static async getCurrentlyLoadedModels() {
     const endpoint = new URL(
-      parseLemonadeServerEndpoint(process.env.LEMONADE_LLM_BASE_PATH, "openai")
+      parseLemonadeServerEndpoint(env.LEMONADE_LLM_BASE_PATH, "openai")
     );
     endpoint.pathname += "/health";
-    const loadedModels = await fetch(endpoint.toString(), {
+    const loadedModels = await scopedFetch(endpoint.toString(), {
       method: "GET",
       headers: {
-        ...(process.env.LEMONADE_LLM_API_KEY
-          ? { Authorization: `Bearer ${process.env.LEMONADE_LLM_API_KEY}` }
+        ...(env.LEMONADE_LLM_API_KEY
+          ? { Authorization: `Bearer ${env.LEMONADE_LLM_API_KEY}` }
           : {}),
       },
     })
@@ -298,7 +307,7 @@ class LemonadeLLM {
    * Does not check if the model is already loaded or unloads any models.
    * @param {*} model
    */
-  static async loadModel(model, basePath = process.env.LEMONADE_LLM_BASE_PATH) {
+  static async loadModel(model, basePath = env.LEMONADE_LLM_BASE_PATH) {
     try {
       const desiredCtxSize = Number(this.promptWindowLimit());
       const currentlyLoadedModels =
@@ -327,11 +336,11 @@ class LemonadeLLM {
         `Loading model ${model} with context size ${desiredCtxSize}`
       );
 
-      await fetch(endpoint.toString(), {
+      await scopedFetch(endpoint.toString(), {
         method: "POST",
         headers: {
-          ...(process.env.LEMONADE_LLM_API_KEY
-            ? { Authorization: `Bearer ${process.env.LEMONADE_LLM_API_KEY}` }
+          ...(env.LEMONADE_LLM_API_KEY
+            ? { Authorization: `Bearer ${env.LEMONADE_LLM_API_KEY}` }
             : {}),
           "Content-Type": "application/json",
         },
@@ -421,7 +430,7 @@ async function getAllLemonadeModels(
   apiKey = null
 ) {
   const availableModels = {};
-  const _apiKey = apiKey || process.env.LEMONADE_LLM_API_KEY || null;
+  const _apiKey = apiKey || env.LEMONADE_LLM_API_KEY || null;
 
   function isValidForTask(model) {
     if (task === "reranking") return model.labels?.includes("reranking");
@@ -440,14 +449,14 @@ async function getAllLemonadeModels(
     // Grab the locally installed models from the Lemonade server API
     const lemonadeUrl = new URL(
       parseLemonadeServerEndpoint(
-        basePath ?? process.env.LEMONADE_LLM_BASE_PATH,
+        basePath ?? env.LEMONADE_LLM_BASE_PATH,
         "openai"
       )
     );
     lemonadeUrl.pathname += "/models";
     lemonadeUrl.searchParams.append("show_all", "true");
 
-    await fetch(lemonadeUrl.toString(), {
+    await scopedFetch(lemonadeUrl.toString(), {
       headers: {
         ...(!!_apiKey ? { Authorization: `Bearer ${_apiKey}` } : {}),
       },

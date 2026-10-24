@@ -1,6 +1,6 @@
 const { v4: uuidv4 } = require("uuid");
 const { EphemeralAgentHandler } = require("../../agents/ephemeral");
-const { WorkspaceChats } = require("../../../models/workspaceChats");
+const { Chat } = require("../../../models/workspaceChats");
 const { safeJsonParse } = require("../../http");
 const {
   editMessage,
@@ -31,7 +31,7 @@ const THOUGHT_FLUSH_INTERVAL_MS = 1500;
 async function handleAgentResponse(
   ctx,
   chatId,
-  workspace,
+  identity,
   thread,
   message,
   voiceResponse = false,
@@ -235,9 +235,9 @@ async function handleAgentResponse(
   try {
     agentHandler = await new EphemeralAgentHandler({
       uuid: uuidv4(),
-      workspace,
+      ctx: identity,
       prompt: message,
-      userId: null,
+      userId: identity.userId,
       threadId: thread?.id || null,
       attachments,
     }).init();
@@ -291,8 +291,12 @@ async function handleAgentResponse(
     const responseText = finalResponse || streamingText;
 
     if (responseText) {
-      await WorkspaceChats.new({
-        workspaceId: workspace.id,
+      await require("../../../enterprise/rag").assertAnswerContext(
+        identity,
+        thread.id,
+        sources
+      );
+      await Chat.new(identity, {
         prompt: message,
         response: {
           text: responseText,

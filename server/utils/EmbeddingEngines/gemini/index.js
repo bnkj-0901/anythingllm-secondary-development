@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 const MODEL_MAP = {
@@ -7,17 +11,19 @@ const MODEL_MAP = {
 
 class GeminiEmbedder {
   constructor() {
-    if (!process.env.GEMINI_EMBEDDING_API_KEY)
+    if (!env.GEMINI_EMBEDDING_API_KEY)
       throw new Error("No Gemini API key was set.");
 
     this.className = "GeminiEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.model = process.env.EMBEDDING_MODEL_PREF || "gemini-embedding-001";
-    this.openai = new OpenAIApi({
-      apiKey: process.env.GEMINI_EMBEDDING_API_KEY,
-      // Even models that are v1 in gemini API can be used with v1beta/openai/ endpoint and nobody knows why.
-      baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
-    });
+    this.model = env.EMBEDDING_MODEL_PREF || "gemini-embedding-001";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.GEMINI_EMBEDDING_API_KEY,
+        // Even models that are v1 in gemini API can be used with v1beta/openai/ endpoint and nobody knows why.
+        baseURL: "https://generativelanguage.googleapis.com/v1beta/openai/",
+      })
+    );
 
     this.maxConcurrentChunks = 4;
 
@@ -37,11 +43,11 @@ class GeminiEmbedder {
 
   get outputDimensions() {
     if (
-      process.env.EMBEDDING_OUTPUT_DIMENSIONS &&
-      !isNaN(process.env.EMBEDDING_OUTPUT_DIMENSIONS) &&
-      process.env.EMBEDDING_OUTPUT_DIMENSIONS > 0
+      env.EMBEDDING_OUTPUT_DIMENSIONS &&
+      !isNaN(env.EMBEDDING_OUTPUT_DIMENSIONS) &&
+      env.EMBEDDING_OUTPUT_DIMENSIONS > 0
     )
-      return parseInt(process.env.EMBEDDING_OUTPUT_DIMENSIONS);
+      return parseInt(env.EMBEDDING_OUTPUT_DIMENSIONS);
     return null;
   }
 

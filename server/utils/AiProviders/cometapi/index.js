@@ -1,3 +1,9 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { v4: uuidv4 } = require("uuid");
 const {
@@ -15,31 +21,33 @@ const { COMETAPI_IGNORE_PATTERNS } = require("./constants");
 const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "cometapi")
     : path.resolve(__dirname, `../../../storage/models/cometapi`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 class CometApiLLM {
   defaultTimeout = 3_000;
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.COMETAPI_LLM_API_KEY)
+    if (!env.COMETAPI_LLM_API_KEY)
       throw new Error("No CometAPI API key was set.");
 
     this.className = "CometApiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.basePath = "https://api.cometapi.com/v1";
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.COMETAPI_LLM_API_KEY ?? null,
-      defaultHeaders: {
-        "HTTP-Referer": "https://anythingllm.com",
-        "X-CometAPI-Source": "anythingllm",
-      },
-    });
-    this.model =
-      modelPreference || process.env.COMETAPI_LLM_MODEL_PREF || "gpt-5-mini";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.COMETAPI_LLM_API_KEY ?? null,
+        defaultHeaders: {
+          "HTTP-Referer": "https://anythingllm.com",
+          "X-CometAPI-Source": "anythingllm",
+        },
+      })
+    );
+    this.model = modelPreference || env.COMETAPI_LLM_MODEL_PREF || "gpt-5-mini";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -49,10 +57,10 @@ class CometApiLLM {
     this.embedder = embedder ?? new NativeEmbedder();
     this.timeout = this.#parseTimeout();
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
 
     this.log(`Loaded with model: ${this.model}`);
   }
@@ -69,11 +77,10 @@ class CometApiLLM {
    */
   #parseTimeout() {
     this.log(
-      `CometAPI timeout is set to ${process.env.COMETAPI_LLM_TIMEOUT_MS ?? this.defaultTimeout}ms`
+      `CometAPI timeout is set to ${env.COMETAPI_LLM_TIMEOUT_MS ?? this.defaultTimeout}ms`
     );
-    if (isNaN(Number(process.env.COMETAPI_LLM_TIMEOUT_MS)))
-      return this.defaultTimeout;
-    const setValue = Number(process.env.COMETAPI_LLM_TIMEOUT_MS);
+    if (isNaN(Number(env.COMETAPI_LLM_TIMEOUT_MS))) return this.defaultTimeout;
+    const setValue = Number(env.COMETAPI_LLM_TIMEOUT_MS);
     if (setValue < 500) return 500;
     return setValue;
   }
@@ -130,7 +137,7 @@ class CometApiLLM {
   }
 
   static promptWindowLimit(modelName) {
-    const cacheModelPath = path.resolve(cacheFolder, "models.json");
+    const cacheModelPath = path.resolve(cacheFolder(), "models.json");
     const availableModels = fs.existsSync(cacheModelPath)
       ? safeJsonParse(
           fs.readFileSync(cacheModelPath, { encoding: "utf-8" }),
@@ -393,11 +400,11 @@ class CometApiLLM {
  * Based on cometapi.md specifications
  */
 async function fetchCometApiModels() {
-  return await fetch(`https://api.cometapi.com/v1/models`, {
+  return await scopedFetch(`https://api.cometapi.com/v1/models`, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.COMETAPI_LLM_API_KEY}`,
+      Authorization: `Bearer ${env.COMETAPI_LLM_API_KEY}`,
     },
   })
     .then((res) => res.json())
@@ -423,17 +430,17 @@ async function fetchCometApiModels() {
       });
 
       // Cache all response information
-      if (!fs.existsSync(cacheFolder))
-        fs.mkdirSync(cacheFolder, { recursive: true });
+      if (!fs.existsSync(cacheFolder()))
+        fs.mkdirSync(cacheFolder(), { recursive: true });
       fs.writeFileSync(
-        path.resolve(cacheFolder, "models.json"),
+        path.resolve(cacheFolder(), "models.json"),
         JSON.stringify(models),
         {
           encoding: "utf-8",
         }
       );
       fs.writeFileSync(
-        path.resolve(cacheFolder, ".cached_at"),
+        path.resolve(cacheFolder(), ".cached_at"),
         String(Number(new Date())),
         {
           encoding: "utf-8",

@@ -14,6 +14,9 @@
 // please do not submit PR's without first verifying this test passes as it will tell you about missing keys or values
 // from the primary dictionary.
 
+import enterpriseEnglish from "./en/enterprise.js";
+import enterpriseMandarin from "./zh/enterprise.js";
+
 import English from "./en/common.js";
 import Korean from "./ko/common.js";
 import Spanish from "./es/common.js";
@@ -50,9 +53,11 @@ export const defaultNS = "common";
 export const resources = {
   en: {
     common: English,
+    enterprise: enterpriseEnglish,
   },
   zh: {
     common: Mandarin,
+    enterprise: enterpriseMandarin,
   },
   "zh-tw": {
     common: TraditionalChinese,

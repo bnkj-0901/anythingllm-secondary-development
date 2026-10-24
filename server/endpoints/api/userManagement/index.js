@@ -1,15 +1,53 @@
 const { User } = require("../../../models/user");
 const { TemporaryAuthToken } = require("../../../models/temporaryAuthToken");
 const { multiUserMode } = require("../../../utils/http");
+const { manager } = require("../../../utils/middleware/externalIdentity");
 const {
   simpleSSOEnabled,
 } = require("../../../utils/middleware/simpleSSOEnabled");
 const { validApiKey } = require("../../../utils/middleware/validApiKey");
+const { userHandlers } = require("../../../enterprise/auth");
+const store = require("../../../enterprise/store");
 
 function apiUserManagementEndpoints(app) {
   if (!app) return;
+  const currentTenant = (req, _res, next) => {
+    req.userTenantId = req.ep.tenantId;
+    next();
+  };
+  app.get(
+    "/v1/admin/users",
+    validApiKey,
+    manager,
+    currentTenant,
+    userHandlers.list
+  );
+  app.post(
+    ["/v1/users", "/v1/admin/users/new"],
+    validApiKey,
+    manager,
+    currentTenant,
+    userHandlers.create
+  );
+  app.post(
+    "/v1/admin/users/:id",
+    validApiKey,
+    manager,
+    currentTenant,
+    userHandlers.update
+  );
+  app.patch(
+    "/v1/users/:id",
+    validApiKey,
+    manager,
+    currentTenant,
+    userHandlers.update
+  );
+  app.get("/v1/admin/is-multi-user-mode", validApiKey, (_req, res) =>
+    res.json({ isMultiUser: true })
+  );
 
-  app.get("/v1/users", [validApiKey], async (request, response) => {
+  app.get("/v1/users", [validApiKey, manager], async (request, response) => {
     /*
       #swagger.tags = ['User Management']
       #swagger.description = 'List all users'
@@ -51,7 +89,7 @@ function apiUserManagementEndpoints(app) {
           .status(401)
           .send("Instance is not in Multi-User mode. Permission denied.");
 
-      const users = await User.where();
+      const users = await User.list(request.ep.tenantId, store);
       const filteredUsers = users.map((user) => ({
         id: user.id,
         username: user.username,
@@ -101,8 +139,11 @@ function apiUserManagementEndpoints(app) {
     }
       */
       try {
-        const { id: userId } = request.params;
-        const user = await User.get({ id: Number(userId) });
+        const userId = Number(request.params.id);
+        const user =
+          userId === request.ep.userId
+            ? await User.get(request.ep.tenantId, userId, store)
+            : null;
         if (!user)
           return response.status(404).json({ error: "User not found" });
 

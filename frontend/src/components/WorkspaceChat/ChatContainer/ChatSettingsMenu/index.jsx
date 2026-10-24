@@ -10,6 +10,8 @@ export default function ChatSettingsMenu({
   history = [],
   workspace = null,
   threadSlug = null,
+  onExport = null,
+  chatUrl = null,
 }) {
   const mode = useLoginMode();
   const [showMenu, setShowMenu] = useState(false);
@@ -41,6 +43,7 @@ export default function ChatSettingsMenu({
       <button
         ref={buttonRef}
         type="button"
+        aria-label="Chat settings"
         onClick={() => setShowMenu(!showMenu)}
         className={`group border-none cursor-pointer flex items-center justify-center w-[35px] h-[35px] rounded-full transition-all ${
           showMenu
@@ -69,9 +72,10 @@ export default function ChatSettingsMenu({
             history={history}
             workspace={workspace}
             threadSlug={threadSlug}
+            onExport={onExport}
             onClose={() => setShowMenu(false)}
           />
-          <CopyLinkToChatRow />
+          <CopyLinkToChatRow chatUrl={chatUrl} />
         </div>
       )}
     </div>

@@ -1,5 +1,6 @@
 import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
+const configurationTenant = () => window.location.pathname === "/settings/agents" ? new URLSearchParams(window.location.search).get("tenantId") : null;
 
 const Admin = {
   // User Management
@@ -163,7 +164,7 @@ const Admin = {
    */
   systemPreferencesByFields: async (labels = []) => {
     return await fetch(
-      `${API_BASE}/admin/system-preferences-for?labels=${labels.join(",")}`,
+      `${API_BASE}/admin/system-preferences-for?labels=${labels.join(",")}${configurationTenant() ? `&tenantId=${encodeURIComponent(configurationTenant())}` : ""}`,
       {
         method: "GET",
         headers: baseHeaders(),
@@ -176,7 +177,7 @@ const Admin = {
       });
   },
   updateSystemPreferences: async (updates = {}) => {
-    return await fetch(`${API_BASE}/admin/system-preferences`, {
+    return await fetch(`${API_BASE}/admin/system-preferences${configurationTenant() ? `?tenantId=${encodeURIComponent(configurationTenant())}` : ""}`, {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify(updates),

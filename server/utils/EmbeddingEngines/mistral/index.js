@@ -1,4 +1,9 @@
 const {
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
+const {
   toChunks,
   maximumChunkLength,
   reportEmbeddingProgress,
@@ -6,17 +11,18 @@ const {
 
 class MistralEmbedder {
   constructor() {
-    if (!process.env.MISTRAL_API_KEY)
-      throw new Error("No Mistral API key was set.");
+    if (!env.MISTRAL_API_KEY) throw new Error("No Mistral API key was set.");
 
     const { OpenAI: OpenAIApi } = require("openai");
     this.className = "MistralEmbedder";
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.mistral.ai/v1",
-      apiKey: process.env.MISTRAL_API_KEY ?? null,
-      fetch: MistralEmbedder.applyMistralFetch(),
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF || "mistral-embed";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.mistral.ai/v1",
+        apiKey: env.MISTRAL_API_KEY ?? null,
+        fetch: MistralEmbedder.applyMistralFetch(),
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF || "mistral-embed";
 
     // Mistral rejects a batch whose total token count is too large with
     // 400 {"code":"3210","message":"Too many tokens overall, split into more batches."}.
@@ -41,7 +47,7 @@ class MistralEmbedder {
    */
   static applyMistralFetch() {
     return async (url, init) => {
-      const response = await fetch(url, init);
+      const response = await scopedFetch(url, init);
       if (response.ok) return response;
 
       const body = await response

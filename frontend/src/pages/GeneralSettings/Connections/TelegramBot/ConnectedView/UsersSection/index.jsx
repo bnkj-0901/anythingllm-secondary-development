@@ -1,4 +1,4 @@
-import { X, Check } from "@phosphor-icons/react";
+import { X } from "@phosphor-icons/react";
 import Telegram from "@/models/telegram";
 import showToast from "@/utils/toast";
 import { useTranslation } from "react-i18next";
@@ -9,18 +9,6 @@ export default function UsersSection({
   fetchUsers,
 }) {
   const { t } = useTranslation();
-
-  async function handleApprove(chatId) {
-    const res = await Telegram.approveUser(chatId);
-    if (!res.success) {
-      showToast(
-        res.error || t("telegram.connected.toast-approve-failed"),
-        "error"
-      );
-      return;
-    }
-    fetchUsers();
-  }
 
   async function handleDeny(chatId) {
     const res = await Telegram.denyUser(chatId);
@@ -67,7 +55,6 @@ export default function UsersSection({
             key={user.chatId || user}
             user={user}
             isPending
-            onApprove={handleApprove}
             onDeny={handleDeny}
           />
         ))}
@@ -83,7 +70,7 @@ export default function UsersSection({
   );
 }
 
-function UserRow({ user, isPending = false, onApprove, onDeny, onRevoke }) {
+function UserRow({ user, isPending = false, onDeny, onRevoke }) {
   const { t } = useTranslation();
   const chatId = typeof user === "string" ? user : user.chatId;
   const username = user.telegramUsername || user.username || null;
@@ -125,12 +112,9 @@ function UserRow({ user, isPending = false, onApprove, onDeny, onRevoke }) {
               >
                 <X className="h-4 w-4" weight="bold" />
               </button>
-              <button
-                onClick={() => onApprove(chatId)}
-                className="text-zinc-400 light:text-slate-400 hover:text-green-400 light:hover:text-green-500 transition-colors"
-              >
-                <Check className="h-4 w-4" weight="bold" />
-              </button>
+              <span className="text-xs text-theme-text-secondary">
+                等待本人配对
+              </span>
             </>
           ) : (
             <button

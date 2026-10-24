@@ -130,7 +130,7 @@ function extractLinks(html, baseUrl, pageUrl = baseUrl) {
   return Array.from(extractedLinks);
 }
 
-async function bulkScrapePages(links, outFolderPath) {
+async function bulkScrapePages(links, outFolderPath, options = {}) {
   const runtimeSettings = new RuntimeSettings();
   /** @type {import('puppeteer').PuppeteerLaunchOptions} */
   let launchConfig = { headless: "new" };
@@ -201,6 +201,7 @@ async function bulkScrapePages(links, outFolderPath) {
         data,
         filename: `${slugify(filename)}-${data.id}`,
         destinationOverride: outFolderPath,
+        options,
       });
       scrapedData.push(data);
 
@@ -213,7 +214,12 @@ async function bulkScrapePages(links, outFolderPath) {
   return scrapedData;
 }
 
-async function websiteScraper(startUrl, depth = 1, maxLinks = 20) {
+async function websiteScraper(
+  startUrl,
+  depth = 1,
+  maxLinks = 20,
+  options = {}
+) {
   const websiteName = new URL(startUrl).hostname;
   const outFolder = slugify(
     `${slugify(websiteName)}-${v4().slice(0, 4)}`
@@ -223,10 +229,14 @@ async function websiteScraper(startUrl, depth = 1, maxLinks = 20) {
   const linksToScrape = await discoverLinks(startUrl, depth, maxLinks);
   console.log(`Found ${linksToScrape.length} links to scrape.`);
 
-  if (!fs.existsSync(outFolderPath))
+  if (!options.returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
   console.log("Starting bulk scraping...");
-  const scrapedData = await bulkScrapePages(linksToScrape, outFolderPath);
+  const scrapedData = await bulkScrapePages(
+    linksToScrape,
+    outFolderPath,
+    options
+  );
   console.log(`Scraped ${scrapedData.length} pages.`);
 
   return scrapedData;

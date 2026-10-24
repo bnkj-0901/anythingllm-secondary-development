@@ -15,14 +15,14 @@ jest.mock("../../../../../utils/helpers", () => ({
   getImageGeneratorProvider: jest.fn(),
 }));
 jest.mock("../../../../../models/workspaceChats", () => ({
-  WorkspaceChats: { _update: jest.fn() },
+  Chat: { update: jest.fn() },
 }));
 
 const {
   generateImageForWorkspace,
   editImageForWorkspace,
 } = require("../../../../../utils/ImageGenerators");
-const { WorkspaceChats } = require("../../../../../models/workspaceChats");
+const { Chat } = require("../../../../../models/workspaceChats");
 const {
   generateImage,
 } = require("../../../../../utils/agents/aibitat/plugins/generate-image.js");
@@ -51,7 +51,10 @@ function setupPlugin(chats = []) {
   const aibitat = {
     chats,
     introspect: jest.fn(),
-    handlerProps: { log: jest.fn() },
+    handlerProps: {
+      log: jest.fn(),
+      ctx: { identity: "tenant", tenantId: "tenant-a", userId: "user-a" },
+    },
     socket: { send: jest.fn() },
     function: (config) => (aibitat._fn = config),
   };
@@ -95,16 +98,20 @@ describe("generate-image agent skill", () => {
   test("writes the image reference to the reserved chat before showing the card", async () => {
     generateImageForWorkspace.mockResolvedValue(SAVED_IMAGE);
     const { aibitat, handler } = setupPlugin();
-    aibitat.trackedChatId = 42;
+    aibitat.trackedChatId = "chat-pair";
 
     await handler({ prompt: "a fox" });
 
     // The serve endpoint only authorizes files referenced by a chat record, so
     // the reference has to land before the frontend requests the image.
-    expect(WorkspaceChats._update).toHaveBeenCalledWith(42, {
-      response: JSON.stringify({ outputs: aibitat._pendingOutputs }),
-    });
-    expect(WorkspaceChats._update.mock.invocationCallOrder[0]).toBeLessThan(
+    expect(Chat.update).toHaveBeenCalledWith(
+      aibitat.handlerProps.ctx,
+      "chat-pair",
+      {
+        response: { outputs: aibitat._pendingOutputs },
+      }
+    );
+    expect(Chat.update.mock.invocationCallOrder[0]).toBeLessThan(
       aibitat.socket.send.mock.invocationCallOrder[1]
     );
   });

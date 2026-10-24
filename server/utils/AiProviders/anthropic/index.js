@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { v4 } = require("uuid");
 const {
   writeResponseChunk,
@@ -26,23 +30,23 @@ class AnthropicLLM {
   }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.ANTHROPIC_API_KEY)
+    if (!env.ANTHROPIC_API_KEY)
       throw new Error("No Anthropic API key was set.");
 
     this.className = "AnthropicLLM";
     // Docs: https://www.npmjs.com/package/@anthropic-ai/sdk
     const AnthropicAI = require("@anthropic-ai/sdk");
-    const anthropic = new AnthropicAI({
-      apiKey: process.env.ANTHROPIC_API_KEY,
-      defaultHeaders: {
-        "User-Agent": getAnythingLLMUserAgent(),
-      },
-    });
+    const anthropic = new AnthropicAI(
+      sdkOptions({
+        apiKey: env.ANTHROPIC_API_KEY,
+        defaultHeaders: {
+          "User-Agent": getAnythingLLMUserAgent(),
+        },
+      })
+    );
     this.anthropic = anthropic;
     this.model =
-      modelPreference ||
-      process.env.ANTHROPIC_MODEL_PREF ||
-      "claude-sonnet-4-6";
+      modelPreference || env.ANTHROPIC_MODEL_PREF || "claude-sonnet-4-6";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -93,15 +97,15 @@ class AnthropicLLM {
    * @param {string} modelName - The name of the model to fetch the max tokens for
    * @returns {Promise<number>} The maximum output tokens limit for API calls.
    */
-  static async fetchModelMaxTokens(
-    modelName = process.env.ANTHROPIC_MODEL_PREF
-  ) {
+  static async fetchModelMaxTokens(modelName = env.ANTHROPIC_MODEL_PREF) {
     try {
       const AnthropicAI = require("@anthropic-ai/sdk");
       /** @type {import("@anthropic-ai/sdk").Anthropic} */
-      const anthropic = new AnthropicAI({
-        apiKey: process.env.ANTHROPIC_API_KEY,
-      });
+      const anthropic = new AnthropicAI(
+        sdkOptions({
+          apiKey: env.ANTHROPIC_API_KEY,
+        })
+      );
       const model = await anthropic.models.retrieve(modelName);
       return Number(model.max_tokens ?? 4096);
     } catch (error) {
@@ -125,10 +129,9 @@ class AnthropicLLM {
     // Store result in instance variable to avoid recalculating
     if (this._cacheControl) return this._cacheControl;
 
-    if (!process.env.ANTHROPIC_CACHE_CONTROL) this._cacheControl = null;
+    if (!env.ANTHROPIC_CACHE_CONTROL) this._cacheControl = null;
     else {
-      const normalized =
-        process.env.ANTHROPIC_CACHE_CONTROL.toLowerCase().trim();
+      const normalized = env.ANTHROPIC_CACHE_CONTROL.toLowerCase().trim();
       if (["5m", "1h"].includes(normalized))
         this._cacheControl = { type: "ephemeral", ttl: normalized };
       else this._cacheControl = null;

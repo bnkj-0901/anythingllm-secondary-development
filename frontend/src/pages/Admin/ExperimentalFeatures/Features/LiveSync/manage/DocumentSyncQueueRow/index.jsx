@@ -9,8 +9,7 @@ export default function DocumentSyncQueueRow({ queue }) {
   const handleDelete = async () => {
     rowRef?.current?.remove();
     await System.experimentalFeatures.liveSync.setWatchStatusForDocument(
-      queue.workspaceDoc.workspace.slug,
-      queue.workspaceDoc.docpath,
+      queue.documentId,
       false
     );
   };
@@ -22,7 +21,7 @@ export default function DocumentSyncQueueRow({ queue }) {
         className="bg-transparent text-white text-opacity-80 text-sm font-medium"
       >
         <td scope="row" className="px-6 py-4 whitespace-nowrap">
-          {stripUuidAndJsonFromString(queue.workspaceDoc.filename)}
+          {stripUuidAndJsonFromString(queue.document.title)}
         </td>
         <td className="px-6 py-4">{moment(queue.lastSyncedAt).fromNow()}</td>
         <td className="px-6 py-4">

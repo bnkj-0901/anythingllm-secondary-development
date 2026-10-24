@@ -1,0 +1,78 @@
+export default {
+  shortcuts: {
+    send: "发送消息",
+    newline: "输入换行",
+    sidebar: "展开或收起聊天侧栏",
+    scroll: "滚动到聊天顶部 / 底部（输入框外）",
+  },
+  chat: {
+    send: "发送",
+    stop: "停止生成",
+    input: "输入您的问题",
+    placeholder: "输入您的问题，让企业知识为您解答…",
+    newChat: "新对话",
+    history: "我的对话",
+    loading: "正在加载对话…",
+    assistant: "知识助手",
+    me: "我",
+    copy: "复制回答",
+    copied: "已复制",
+    generating: "正在生成",
+    unfinished: "生成未完成",
+    grounded: "基于知识库回答",
+    thinking: "正在检索知识并思考…",
+  },
+
+  navigation: {
+    knowledgeAssistant: "知识助手",
+    management: "管理设置",
+    appearance: "外观",
+    system: "跟随系统",
+    light: "浅色",
+    dark: "深色",
+    platform: "平台管理",
+    tenant: "当前租户",
+    platformAdmin: "平台管理员",
+    admin: "租户管理员",
+    member: "普通用户",
+    logout: "退出登录",
+    open: "展开菜单",
+    close: "关闭菜单",
+    preferences: "界面偏好",
+  },
+  pages: {
+    chat: "问答检索",
+    knowledge: "知识管理",
+    users: "用户与角色",
+    connections: "AI 连接配置",
+    platformConnections: "平台 AI 连接",
+    tenants: "租户管理",
+    knowledgeDescription: "管理获授权知识库中的资料，文件与文字使用相同的权限规则。",
+    usersDescription: "管理当前租户的用户、角色和使用状态。",
+    connectionsDescription:
+      "管理当前租户的模型连接，查看可使用的平台共享连接。",
+    platformConnectionsDescription:
+      "管理平台共享的对话模型、Embedding 模型及默认连接。",
+    tenantsDescription: "管理独立组织及其使用状态。",
+  },
+  markdown: {
+    copyBlock: "复制代码块",
+    copied: "已复制",
+    copyFailed: "未能复制，请在代码块中选择文字进行复制。",
+    richCopy: "复制格式化回答",
+  },
+  files: {
+    loading: "正在读取支持的文件格式…",
+    unavailable: "无法读取支持的文件格式，请重试后上传。",
+    supported:
+      "预设格式：{{extensions}}；其他文字文件由解析服务识别。单文件最大 {{size}} MB。",
+    invalid: "暂不支持此文件类型。",
+    tooLarge: "文件超过 {{size}} MB 大小限制。",
+  },
+  rag: {
+    rerank: "重排检索结果",
+    cache: "复用本资料的向量缓存",
+    cacheHint:
+      "仅复用同租户、同资料、同模型和相同内容的缓存，不跨资料或用户复用。",
+  },
+};

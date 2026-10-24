@@ -9,6 +9,7 @@ import useUser from "@/hooks/useUser";
 
 export default function ParsedFilesMenu({
   onEmbeddingChange,
+  resourceApi = Workspace,
   tooltipRef,
   files,
   setFiles,
@@ -35,7 +36,9 @@ export default function ParsedFilesMenu({
     e.stopPropagation();
     if (!file?.id) return;
 
-    const success = await Workspace.deleteParsedFiles(workspaceSlug, [file.id]);
+    const success = await resourceApi.deleteParsedFiles(workspaceSlug, [
+      file.id,
+    ]);
     if (!success) return;
 
     // Update the local files list and current tokens
@@ -47,7 +50,7 @@ export default function ParsedFilesMenu({
         detail: { document: file },
       })
     );
-    const { currentContextTokenCount } = await Workspace.getParsedFiles(
+    const { currentContextTokenCount } = await resourceApi.getParsedFiles(
       workspaceSlug,
       threadSlug
     );
@@ -70,10 +73,16 @@ export default function ParsedFilesMenu({
     onEmbeddingChange?.(true);
     setEmbedProgress(1);
     try {
+      if (resourceApi.saveParsedFiles) {
+        await resourceApi.saveParsedFiles(files.map((file) => file.id));
+        showToast("Files submitted to knowledge library", "success");
+        tooltipRef?.current?.close();
+        return;
+      }
       let completed = 0;
       const results = await Promise.all(
         files.map((file) =>
-          Workspace.embedParsedFile(workspaceSlug, file.id).then((result) => {
+          resourceApi.embedParsedFile(workspaceSlug, file.id).then((result) => {
             completed++;
             setEmbedProgress(completed + 1);
             return result;
@@ -81,7 +90,7 @@ export default function ParsedFilesMenu({
         )
       );
       setFiles([]);
-      const { currentContextTokenCount } = await Workspace.getParsedFiles(
+      const { currentContextTokenCount } = await resourceApi.getParsedFiles(
         workspaceSlug,
         threadSlug
       );
@@ -101,10 +110,11 @@ export default function ParsedFilesMenu({
     } catch (error) {
       console.error("Failed to embed files:", error);
       showToast("Failed to embed files", "error");
+    } finally {
+      setIsEmbedding(false);
+      onEmbeddingChange?.(false);
+      setEmbedProgress(1);
     }
-    setIsEmbedding(false);
-    onEmbeddingChange?.(false);
-    setEmbedProgress(1);
   }
 
   return (
@@ -144,7 +154,7 @@ export default function ParsedFilesMenu({
             <div className="text-xs text-theme-text-primary">
               Your context window is getting full. Some files may be truncated
               or excluded from chat responses. We recommend embedding these
-              files directly into your workspace for better results.
+              files into a knowledge library for better results.
             </div>
           </div>
           <button
@@ -158,7 +168,7 @@ export default function ParsedFilesMenu({
                 Embedding {embedProgress} of {files.length} files...
               </>
             ) : (
-              "Embed Files into Workspace"
+              "Save Files to Knowledge"
             )}
           </button>
         </div>

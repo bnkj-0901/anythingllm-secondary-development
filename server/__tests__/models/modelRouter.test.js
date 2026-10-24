@@ -3,6 +3,7 @@ process.env.NODE_ENV = "test";
 
 jest.mock("../../utils/prisma", () => ({
   model_routers: { create: jest.fn(async ({ data }) => ({ id: 1, ...data })) },
+  ep_rag_settings: { findMany: jest.fn() },
 }));
 
 const prisma = require("../../utils/prisma");
@@ -24,7 +25,8 @@ describe("ModelRouter.create cooldown_seconds", () => {
 
   beforeEach(() => prisma.model_routers.create.mockClear());
 
-  const createdWith = () => prisma.model_routers.create.mock.calls[0][0].data;
+  const createdWith = () =>
+    prisma.model_routers.create.mock.calls.at(-1)[0].data;
 
   it("defaults to seconds, not the millisecond constant, when omitted", async () => {
     await ModelRouter.create({ ...VALID_ROUTER });
@@ -57,5 +59,23 @@ describe("ModelRouter.create cooldown_seconds", () => {
   it("falls back to 30s when an explicit cooldown fails validation", async () => {
     await ModelRouter.create({ ...VALID_ROUTER, cooldown_seconds: 999999 });
     expect(createdWith().cooldown_seconds).toBe(30);
+  });
+
+  it("records either enterprise integer creators or top administrator IDs in the audit field", async () => {
+    await ModelRouter.create(VALID_ROUTER, 3);
+    expect(createdWith().created_by).toBe("3");
+    await ModelRouter.create(VALID_ROUTER, "top-administrator");
+    expect(createdWith().created_by).toBe("top-administrator");
+  });
+
+  it("counts tenant configurations that use the router after Workspace removal", async () => {
+    prisma.ep_rag_settings.findMany.mockResolvedValue([
+      { settings: '{"router_id":7}' },
+      { settings: '{"router_id":"7"}' },
+      { settings: '{"router_id":8}' },
+      { settings: "{broken" },
+      { settings: "{}" },
+    ]);
+    expect(await ModelRouter.workspaceCount(7)).toBe(2);
   });
 });

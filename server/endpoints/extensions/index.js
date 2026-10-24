@@ -1,5 +1,6 @@
 const { Telemetry } = require("../../models/telemetry");
 const { CollectorApi } = require("../../utils/collectorApi");
+const { reqBody } = require("../../utils/http");
 const {
   flexUserRoleValid,
   ROLES,
@@ -194,4 +195,87 @@ function extensionEndpoints(app) {
   );
 }
 
-module.exports = { extensionEndpoints };
+module.exports = { extensionEndpoints, knowledgeImportEndpoints };
+
+// Preserve the original extraction engines. Only the authenticated knowledge
+// layer decides where content belongs and whether it requires approval.
+function knowledgeImportEndpoints(router) {
+  const {
+    requireAuth,
+    requirePlatformAuth,
+    fail,
+    refreshContext,
+  } = require("../../enterprise/auth");
+  const { requireLibrary, submitText } = require("../../enterprise/knowledge");
+  const wrap = (fn) => (req, res, next) =>
+    Promise.resolve(fn(req, res)).catch(next);
+  const importDocuments = wrap(async (req, res) => {
+    const { libraryId, connector, args = {} } = reqBody(req);
+    if (typeof libraryId !== "string" || !libraryId)
+      throw fail(400, "请选择目标知识库");
+    if (
+      ![
+        "github",
+        "gitlab",
+        "gitea",
+        "confluence",
+        "drupalwiki",
+        "obsidian",
+        "paperless-ngx",
+        "youtube-transcript",
+        "website-depth",
+      ].includes(connector)
+    )
+      throw fail(400, "不支持的资料连接器");
+    await refreshContext(req.ep);
+    await requireLibrary(req.ep, libraryId);
+    const result = await new CollectorApi().forwardExtensionRequest({
+      endpoint: "/ext/import",
+      method: "POST",
+      body: { connector, args },
+    });
+    if (!result.success)
+      throw fail(422, "连接器无法提取资料，请检查地址和连接凭据");
+    const documents =
+      result.documents?.filter(
+        (document) =>
+          typeof document.pageContent === "string" &&
+          document.pageContent.trim()
+      ) || [];
+    if (!documents.length) throw fail(422, "连接器没有返回可导入的资料正文");
+    const published = [],
+      changes = [];
+    for (const document of documents) {
+      const { pageContent, ...metadata } = document;
+      delete metadata.location;
+      delete metadata.isDirectUpload;
+      const submitted = await submitText(req.ep, {
+        libraryId,
+        title: String(document.title || document.url || connector).slice(
+          0,
+          255
+        ),
+        content: pageContent,
+        metadata,
+      });
+      if (submitted.approvalRequired) changes.push(submitted.change);
+      else published.push(submitted.document);
+    }
+    res.status(202).json({
+      success: true,
+      data: {
+        imported: documents.length,
+        approvalRequired: changes.length > 0,
+        documents: published,
+        changes,
+      },
+      error: null,
+    });
+  });
+  router.post("/data-connectors/import", requireAuth, importDocuments);
+  router.post(
+    "/platform/data-connectors/import",
+    requirePlatformAuth,
+    importDocuments
+  );
+}

@@ -1,4 +1,9 @@
 const {
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
+const {
   maximumChunkLength,
   reportEmbeddingProgress,
 } = require("../../helpers");
@@ -7,28 +12,30 @@ const { OllamaAILLM } = require("../../AiProviders/ollama");
 
 class OllamaEmbedder {
   constructor() {
-    if (!process.env.EMBEDDING_BASE_PATH)
+    if (!env.EMBEDDING_BASE_PATH)
       throw new Error("No embedding base path was set.");
-    if (!process.env.EMBEDDING_MODEL_PREF)
+    if (!env.EMBEDDING_MODEL_PREF)
       throw new Error("No embedding model was set.");
 
     this.className = "OllamaEmbedder";
-    this.basePath = process.env.EMBEDDING_BASE_PATH;
-    this.model = process.env.EMBEDDING_MODEL_PREF;
-    this.maxConcurrentChunks = process.env.OLLAMA_EMBEDDING_BATCH_SIZE
-      ? Number(process.env.OLLAMA_EMBEDDING_BATCH_SIZE)
+    this.basePath = env.EMBEDDING_BASE_PATH;
+    this.model = env.EMBEDDING_MODEL_PREF;
+    this.maxConcurrentChunks = env.OLLAMA_EMBEDDING_BATCH_SIZE
+      ? Number(env.OLLAMA_EMBEDDING_BATCH_SIZE)
       : 1;
     this.embeddingMaxChunkLength = maximumChunkLength();
-    this.authToken = process.env.OLLAMA_AUTH_TOKEN;
+    this.authToken = env.OLLAMA_AUTH_TOKEN;
 
     const headers = this.authToken
       ? { Authorization: `Bearer ${this.authToken}` }
       : {};
-    this.client = new Ollama({
-      host: this.basePath,
-      headers,
-      fetch: OllamaAILLM.applyOllamaFetch(),
-    });
+    this.client = new Ollama(
+      sdkOptions({
+        host: this.basePath,
+        headers,
+        fetch: OllamaAILLM.applyOllamaFetch(),
+      })
+    );
     this.log(
       `initialized with model ${this.model} at ${this.basePath}. Batch size: ${this.maxConcurrentChunks}, num_ctx: ${this.embeddingMaxChunkLength}`
     );
@@ -47,7 +54,7 @@ class OllamaEmbedder {
       ? { Authorization: `Bearer ${this.authToken}` }
       : {};
 
-    return await fetch(this.basePath, { headers })
+    return await scopedFetch(this.basePath, { headers })
       .then((res) => res.ok)
       .catch((e) => {
         this.log(e.message);

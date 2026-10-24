@@ -1,13 +1,10 @@
 const { Document } = require("../models/documents.js");
 const { DocumentSyncQueue } = require("../models/documentSyncQueue.js");
-const { DocumentVectors } = require("../models/vectors.js");
 const { CollectorApi } = require("../utils/collectorApi");
-const { fileData } = require("../utils/files");
-const { log, conclude, updateSourceDocument } = require("./helpers/index.js");
-const { getVectorDbClass } = require("../utils/helpers/index.js");
+const { log, conclude } = require("./helpers/index.js");
 const { DocumentSyncRun } = require("../models/documentSyncRun.js");
 
-(async () => {
+async function syncWatchedDocuments() {
   try {
     const queuesToProcess = await DocumentSyncQueue.staleDocumentQueues();
     if (queuesToProcess.length === 0) {
@@ -26,17 +23,30 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
     );
     for (const queue of queuesToProcess) {
       let newContent = null;
-      const document = queue.workspaceDoc;
-      const workspace = document.workspace;
+      const document = queue.document;
+      let identity;
+      try {
+        identity =
+          await require("../enterprise/execution-context").loadExecutionContext(
+            queue
+          );
+        await require("../enterprise/knowledge").requireDocument(
+          identity,
+          document.id
+        );
+      } catch {
+        continue;
+      } // A disabled account or revoked grant pauses its watch.
+
       const { metadata, type, source } =
         Document.parseDocumentTypeAndSource(document);
 
       if (!metadata || !DocumentSyncQueue.validFileTypes.includes(type)) {
         // Document is either broken, invalid, or not supported so drop it from future queues.
         log(
-          `Document ${document.filename} has no metadata, is broken, or invalid and has been removed from all future runs.`
+          `Document ${document.title} has no metadata, is broken, or invalid and has been removed from all future runs.`
         );
-        await DocumentSyncQueue.unwatch(document);
+        await DocumentSyncQueue.unwatch(identity, document);
         continue;
       }
 
@@ -79,9 +89,9 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
         ).length;
         if (failedRunCount >= DocumentSyncQueue.maxRepeatFailures) {
           log(
-            `Document ${document.filename} has failed to refresh ${failedRunCount} times continuously and will now be removed from the watched document set.`
+            `Document ${document.title} has failed to refresh ${failedRunCount} times continuously and will now be removed from the watched document set.`
           );
-          await DocumentSyncQueue.unwatch(document);
+          await DocumentSyncQueue.unwatch(identity, document);
           continue;
         }
 
@@ -92,7 +102,7 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
           queue.id,
           DocumentSyncRun.statuses.failed,
           {
-            filename: document.filename,
+            filename: document.title,
             workspacesModified: [],
             reason: "No content found.",
           }
@@ -100,8 +110,7 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
         continue;
       }
 
-      const currentDocumentData = await fileData(document.docpath);
-      if (currentDocumentData.pageContent === newContent) {
+      if (document.content === newContent) {
         const nextSync = DocumentSyncQueue.calcNextSync(queue);
         log(
           `Source ${source} is unchanged and will be skipped. Next sync will be ${nextSync.toLocaleString()}.`
@@ -114,7 +123,7 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
           queue.id,
           DocumentSyncRun.statuses.exited,
           {
-            filename: document.filename,
+            filename: document.title,
             workspacesModified: [],
             reason: "Content unchanged.",
           }
@@ -122,137 +131,34 @@ const { DocumentSyncRun } = require("../models/documentSyncRun.js");
         continue;
       }
 
-      // update the defined document and workspace vectorDB with the latest information
-      // it will skip cache and create a new vectorCache file.
-      const vectorDatabase = getVectorDbClass();
-      // The published timestamp is half of the identifier used to filter RAG results whose parent
-      // document is pinned, so the vectors and the source document have to be stamped with the
-      // same value or a pinned document will be injected as full-text and as chunks.
-      const publishedAt = new Date().toLocaleString();
-      await vectorDatabase.deleteDocumentFromNamespace(
-        workspace.slug,
-        document.docId
-      );
-      // Remove document_vectors rows on delete
-      await DocumentVectors.delete({ docId: document.docId });
-      const embedResult = await vectorDatabase.addDocumentToNamespace(
-        workspace.slug,
-        {
-          ...currentDocumentData,
-          pageContent: newContent,
-          docId: document.docId,
-          published: publishedAt,
-        },
-        document.docpath,
-        true
-      );
-      // Embed failures are recorded on the run but not retried. The new content is still saved
-      // below so the next sync compares against it instead of re-embedding the same change.
-      const failures = [];
-      if (embedResult?.vectorized === false) {
-        failures.push({ workspace: workspace.slug, error: embedResult.error });
-        log(
-          `Failed to embed the new content of ${source} into workspace "${workspace.name}": ${embedResult.error}`
+      // A source update uses the same content mutation as an interactive user.
+      // Public revisions remain pending; the published version stays searchable.
+      const result =
+        await require("../enterprise/knowledge").submitSyncedContent(
+          identity,
+          document.id,
+          newContent
         );
-      } else {
-        log(`Workspace "${workspace.name}" vectors of ${source} updated.`);
-      }
-
-      // Now we can bloom the results to all matching documents in all other workspaces
-      const workspacesModified = [workspace.slug];
-      const moreReferences = await Document.where(
-        {
-          id: { not: document.id },
-          filename: document.filename,
-        },
-        null,
-        null,
-        { workspace: true }
-      );
-
-      if (moreReferences.length !== 0) {
-        log(
-          `${source} is referenced in ${moreReferences.length} other workspaces. Updating those workspaces as well...`
-        );
-        for (const additionalDocumentRef of moreReferences) {
-          const additionalWorkspace = additionalDocumentRef.workspace;
-          workspacesModified.push(additionalWorkspace.slug);
-
-          await vectorDatabase.deleteDocumentFromNamespace(
-            additionalWorkspace.slug,
-            additionalDocumentRef.docId
-          );
-          await DocumentVectors.delete({ docId: additionalDocumentRef.docId });
-          const additionalResult = await vectorDatabase.addDocumentToNamespace(
-            additionalWorkspace.slug,
-            {
-              ...currentDocumentData,
-              pageContent: newContent,
-              docId: additionalDocumentRef.docId,
-              published: publishedAt,
-            },
-            additionalDocumentRef.docpath
-          );
-          if (additionalResult?.vectorized === false) {
-            failures.push({
-              workspace: additionalWorkspace.slug,
-              error: additionalResult.error,
-            });
-            log(
-              `Failed to embed the new content of ${source} into workspace "${additionalWorkspace.name}": ${additionalResult.error}`
-            );
-            continue;
-          }
-          log(
-            `Workspace "${additionalWorkspace.name}" vectors for ${source} was also updated with the new content from cache.`
-          );
-        }
-      }
-
-      updateSourceDocument(document.docpath, {
-        ...currentDocumentData,
-        pageContent: newContent,
-        docId: document.docId,
-        published: publishedAt,
-        // Todo: Update word count and token_estimate?
-      });
-
-      const nextRefresh = DocumentSyncQueue.calcNextSync(queue);
-      log(
-        `${source} has been refreshed in all workspaces it is currently referenced in. Next refresh will be ${nextRefresh.toLocaleString()}.`
-      );
       await DocumentSyncQueue._update(queue.id, {
-        lastSyncedAt: new Date().toISOString(),
-        nextSyncAt: nextRefresh.toISOString(),
+        lastSyncedAt: new Date(),
+        nextSyncAt: DocumentSyncQueue.calcNextSync(queue),
+        failedAttempts: 0,
       });
-      if (failures.length === 0) {
-        await DocumentSyncQueue.saveRun(
-          queue.id,
-          DocumentSyncRun.statuses.success,
-          { filename: document.filename, workspacesModified }
-        );
-        continue;
-      }
-
-      const failedSlugs = failures.map((f) => f.workspace);
       await DocumentSyncQueue.saveRun(
         queue.id,
-        DocumentSyncRun.statuses.failed,
+        DocumentSyncRun.statuses.success,
         {
-          filename: document.filename,
-          workspacesModified: workspacesModified.filter(
-            (slug) => !failedSlugs.includes(slug)
-          ),
-          reason: `Failed to embed the new content into: ${failures
-            .map((f) => `${f.workspace} (${f.error || "unknown error"})`)
-            .join(", ")}`,
+          filename: document.title,
+          libraryId: document.libraryId,
+          approvalRequired: !!result.approvalRequired,
         }
       );
     }
   } catch (e) {
     console.error(e);
     log(`errored with ${e.message}`);
-  } finally {
-    conclude();
   }
-})();
+}
+
+if (require.main === module) syncWatchedDocuments().finally(conclude);
+module.exports = { syncWatchedDocuments };

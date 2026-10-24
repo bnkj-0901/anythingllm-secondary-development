@@ -1,14 +1,20 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 class OpenAiEmbedder {
   constructor() {
-    if (!process.env.OPEN_AI_KEY) throw new Error("No OpenAI API key was set.");
+    if (!env.OPEN_AI_KEY) throw new Error("No OpenAI API key was set.");
     this.className = "OpenAiEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      apiKey: process.env.OPEN_AI_KEY,
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF || "text-embedding-ada-002";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.OPEN_AI_KEY,
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF || "text-embedding-ada-002";
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 500;

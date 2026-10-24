@@ -13,6 +13,7 @@ import showToast from "@/utils/toast";
 import JobRow from "./components/JobRow";
 import { Bell } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
+import { savedSession } from "@/models/platform";
 
 export default function ScheduledJobsPage() {
   const { t } = useTranslation();
@@ -21,10 +22,20 @@ export default function ScheduledJobsPage() {
   const [loading, setLoading] = useState(true);
   const [jobs, setJobs] = useState([]);
   const [editingJob, setEditingJob] = useState(null);
+  const [managedJobs, setManagedJobs] = useState([]);
+  const session = savedSession();
+  const tenantAdmin =
+    session?.identity === "tenant" && session?.role === "admin";
 
   const fetchJobs = async () => {
     const { jobs: foundJobs } = await ScheduledJobs.list();
     setJobs(foundJobs || []);
+    if (tenantAdmin) {
+      const managed = await ScheduledJobs.managed();
+      setManagedJobs(
+        (managed.jobs || []).filter((job) => job.userId !== session.user.id)
+      );
+    }
     setLoading(false);
   };
 
@@ -141,6 +152,40 @@ export default function ScheduledJobsPage() {
         )}
       </div>
 
+      {tenantAdmin && managedJobs.length > 0 && (
+        <div className="pt-8">
+          <p className="text-sm font-semibold text-theme-text-primary mb-3">
+            企业任务管理
+          </p>
+          <p className="text-xs text-theme-text-secondary mb-3">
+            可停用其他用户的任务；提示词和执行结果仅本人可见。
+          </p>
+          {managedJobs.map((job) => (
+            <div
+              key={job.id}
+              className="flex items-center justify-between py-3 border-b border-white/10"
+            >
+              <span className="text-sm text-theme-text-primary">
+                {job.name}
+              </span>
+              <button
+                type="button"
+                disabled={!job.enabled}
+                onClick={async () => {
+                  const result = await ScheduledJobs.update(job.id, {
+                    enabled: false,
+                  });
+                  if (result.error) showToast(result.error, "error");
+                  fetchJobs();
+                }}
+                className="text-sm text-theme-text-secondary disabled:opacity-40"
+              >
+                {job.enabled ? "停用任务" : "已停用"}
+              </button>
+            </div>
+          ))}
+        </div>
+      )}
       <Modal isOpen={isOpen} onClose={closeModal} size="md">
         <JobFormModal
           job={editingJob}

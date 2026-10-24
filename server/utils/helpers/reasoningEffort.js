@@ -1,4 +1,5 @@
 const { MODEL_PRICING } = require("./modelPricing");
+const { scopedCache } = require("../../enterprise/ai/connection-context");
 
 /**
  * Every effort level a chat session can pick. Which of these a request may actually carry depends on the provider
@@ -193,7 +194,7 @@ function reasoningParams(provider, effort = null, model = null) {
 
 // OpenAI only returns reasoning summaries to verified organizations - once a
 // request is refused for that, summaries are no longer requested.
-let reasoningSummariesUnavailable = false;
+const reasoningSummaryState = { unavailable: false };
 
 /**
  * Whether an OpenAI error is the refusal to return reasoning summaries.
@@ -223,13 +224,14 @@ async function createWithReasoningSummaryFallback(create, body) {
     return { ...body, reasoning };
   };
 
-  if (reasoningSummariesUnavailable) return await create(withoutSummary());
+  if (scopedCache(reasoningSummaryState).unavailable)
+    return await create(withoutSummary());
   try {
     return await create(body);
   } catch (error) {
     if (!body?.reasoning?.summary || !isReasoningSummaryRefusal(error))
       throw error;
-    reasoningSummariesUnavailable = true;
+    scopedCache(reasoningSummaryState).unavailable = true;
     console.log(
       `\x1b[36m[ReasoningEffort]\x1b[0m Reasoning summaries are not available for this OpenAI organization - requesting without them.`
     );
@@ -239,7 +241,7 @@ async function createWithReasoningSummaryFallback(create, body) {
 
 /** Resets the summary refusal flag - for tests only. */
 function resetReasoningSummaryFallback() {
-  reasoningSummariesUnavailable = false;
+  scopedCache(reasoningSummaryState).unavailable = false;
 }
 
 const CAPABILITY_CACHE_TTL_MS = 5 * 60 * 1000;
@@ -259,7 +261,7 @@ async function getReasoningCapabilities(llm) {
     return { reasoning: false, reasoningOptions: [] };
 
   const key = `${llm.constructor.name}:${llm.basePath ?? ""}:${llm.model}`;
-  const cached = capabilityCache.get(key);
+  const cached = scopedCache(capabilityCache).get(key);
   if (cached && cached.expiresAt > Date.now()) return cached.capabilities;
 
   const result = await llm.getModelCapabilities().catch(() => null);
@@ -270,7 +272,7 @@ async function getReasoningCapabilities(llm) {
       : [],
   };
   if (capabilities.reasoning !== "unknown")
-    capabilityCache.set(key, {
+    scopedCache(capabilityCache).set(key, {
       expiresAt: Date.now() + CAPABILITY_CACHE_TTL_MS,
       capabilities,
     });

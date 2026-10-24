@@ -52,9 +52,11 @@ class DrupalWiki {
    * @param spaceId
    * @param accessToken
    */
-  constructor({ baseUrl, accessToken }) {
+  constructor({ baseUrl, accessToken, returnDocuments = false }) {
     this.baseUrl = baseUrl;
     this.accessToken = accessToken;
+    this.returnDocuments = returnDocuments;
+    this.documents = [];
     this.storagePath = this.#prepareStoragePath(baseUrl);
   }
 
@@ -204,11 +206,13 @@ class DrupalWiki {
     console.log(
       `[DrupalWiki Loader]: Saving page '${page.title}' (${page.id}) to '${this.storagePath}/${fileName}'`
     );
-    writeToServerDocuments({
-      data,
-      filename: fileName,
-      destinationOverride: this.storagePath,
-    });
+    if (this.returnDocuments) this.documents.push(data);
+    else
+      writeToServerDocuments({
+        data,
+        filename: fileName,
+        destinationOverride: this.storagePath,
+      });
   }
 
   /**
@@ -254,7 +258,8 @@ class DrupalWiki {
     const { hostname } = new URL(baseUrl);
     const subFolder = slugify(`drupalwiki-${hostname}`).toLowerCase();
     const outFolder = path.resolve(documentsFolder, subFolder);
-    if (!fs.existsSync(outFolder)) fs.mkdirSync(outFolder, { recursive: true });
+    if (!this.returnDocuments && !fs.existsSync(outFolder))
+      fs.mkdirSync(outFolder, { recursive: true });
     return outFolder;
   }
 
@@ -317,7 +322,11 @@ class DrupalWiki {
         const localFilePath = normalizePath(
           path.resolve(
             WATCH_DIRECTORY,
-            sanitizeFileName(path.basename(fileName))
+            sanitizeFileName(
+              this.returnDocuments
+                ? `${require("uuid").v4()}-${path.basename(fileName)}`
+                : path.basename(fileName)
+            )
           )
         );
         if (!isWithin(path.resolve(WATCH_DIRECTORY), localFilePath)) {
@@ -330,7 +339,12 @@ class DrupalWiki {
         }
 
         require("fs").writeFileSync(localFilePath, Buffer.from(buffer));
-        await processSingleFile(localFilePath);
+        if (this.returnDocuments) {
+          const parsed = await processSingleFile(localFilePath, {
+            returnDocuments: true,
+          });
+          this.documents.push(...(parsed.documents || []));
+        } else await processSingleFile(localFilePath);
       }
     } catch (err) {
       console.error(`Fetching/processing attachments failed:`, err);

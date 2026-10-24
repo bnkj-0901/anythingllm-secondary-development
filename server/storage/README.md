@@ -1,24 +1,32 @@
 # AnythingLLM Storage
 
-This folder is for the local or disk storage of ready-to-embed documents, vector-cached embeddings, and the disk-storage of LanceDB and the local SQLite database.
+This directory contains persistent files used by the SaaS application. The
+runtime business database is PostgreSQL, configured with `DATABASE_URL`; this
+directory does not need an `anythingllm.db` file.
 
-This folder should contain the following folders.
-`documents`
-`lancedb` (if using lancedb)
-`vector-cache`
-and a file named exactly `anythingllm.db`
+- `enterprise/<tenant-id>/`: uploaded knowledge originals, isolated by tenant.
+- `lancedb/`: vectors when the platform selects the default local LanceDB backend.
+- `assets/`: branding images used by the restored settings pages.
+- `models/` and temporary/cache directories: created by providers that need local
+  models or generated files.
 
+PostgreSQL stores tenant and account data, knowledge and chunk text, ownership,
+index versions/status, original-file paths, conversations, messages and citations.
+Actual vectors belong to the selected vector backend. Remote vector backends do
+not require a local LanceDB directory. Retained upstream `documents/` and
+`vector-cache/` folders are not the current SaaS knowledge-record database.
 
-### Common issues
-**SQLITE_FILE_CANNOT_BE_OPENED** in the server log = The DB file does not exist probably because the node instance does not have the correct permissions to write a file to the disk. To solve this..
+Docker Compose mounts this folder at `/app/server/storage` by default; set
+`SERVER_STORAGE_PATH` in `docker/.env` to use another persistent host directory.
+The configured container user must be able to write to it. Missing-original or
+permission errors should be resolved by checking that mount, the file ownership
+and the configured storage path; creating a SQLite file is not a fix.
 
-- Local dev
-  - Create a `anythingllm.db` empty file in this directory. Thats all. No need to reboot the server or anything. If your permissions are correct this should not ever occur since the server will create the file if it does not exist automatically.
+Fresh deployment runs the PostgreSQL migrations before starting the API. The
+runtime schema is defined by the single PostgreSQL schema and migration chain,
+without Workspace membership or the upstream single-user SQLite seed.
+See [Docker deployment](../../docker/HOW_TO_USE_DOCKER.md) for the build/start steps.
 
-- Docker Instance
-  - Get your AnythingLLM docker container id with `docker ps -a`. The container must be running to execute the next commands.
-  - Run `docker container exec -u 0 -t <ANYTHINGLLM DOCKER CONTAINER ID> mkdir -p /app/server/storage /app/server/storage/documents /app/server/storage/vector-cache /app/server/storage/lancedb`
-  - Run `docker container exec -u 0 -t <ANYTHINGLLM DOCKER CONTAINER ID> touch /app/server/storage/anythingllm.db`
-  - Run `docker container exec -u 0 -t <ANYTHINGLLM DOCKER CONTAINER ID> chown -R anythingllm:anythingllm /app/collector /app/server`
-
-  - The above commands will create the appropriate folders inside of the docker container and will persist as long as you do not destroy the container and volume. This will also fix any ownership issues of folder files in the collector and the server.
+Back up PostgreSQL, uploaded originals, local or remote vector storage and the
+deployment encryption/signing configuration together. A database backup alone
+does not contain the uploaded files or the keys needed to decrypt saved secrets.

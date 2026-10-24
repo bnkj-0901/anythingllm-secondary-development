@@ -3,11 +3,17 @@ import CommunityHubImportItemSteps from "../..";
 import showToast from "@/utils/toast";
 import paths from "@/utils/paths";
 import CommunityHub from "@/models/communityHub";
+import { useState } from "react";
+import ExecutionIdentity from "@/components/lib/ExecutionIdentity";
 
 export default function SlashCommand({ item, setStep }) {
+  const [destination, setDestination] = useState({ tenantId: "", userId: "" });
   async function handleSubmit() {
     try {
-      const { error } = await CommunityHub.applyItem(item.importId);
+      const { error } = await CommunityHub.applyItem(
+        item.importId,
+        destination
+      );
       if (error) throw new Error(error);
       showToast(
         `Slash command ${item.command} imported successfully!`,
@@ -43,7 +49,7 @@ export default function SlashCommand({ item, setStep }) {
       <div className="flex flex-col gap-y-[25px] text-white/80 light:text-theme-text-secondary text-sm">
         <p>
           Slash commands are used to prefill information into a prompt while
-          chatting with a AnythingLLM workspace.
+          chatting in the selected user's personal conversations.
           <br />
           <br />
           The slash command will be available during chatting by simply invoking
@@ -68,9 +74,11 @@ export default function SlashCommand({ item, setStep }) {
           </div>
         </div>
       </div>
+      <ExecutionIdentity value={destination} onChange={setDestination} />
       <CTAButton
         className="text-dark-text w-full mt-[18px] h-[34px] hover:bg-accent"
         onClick={handleSubmit}
+        disabled={!destination.tenantId || !destination.userId}
       >
         Import slash command
       </CTAButton>

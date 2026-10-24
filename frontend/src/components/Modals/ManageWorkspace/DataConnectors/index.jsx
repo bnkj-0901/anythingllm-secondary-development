@@ -7,7 +7,7 @@ import GiteaOptions from "./Connectors/Gitea";
 import YoutubeOptions from "./Connectors/Youtube";
 import ConfluenceOptions from "./Connectors/Confluence";
 import DrupalWikiOptions from "./Connectors/DrupalWiki";
-import { useState } from "react";
+import { cloneElement, useState } from "react";
 import ConnectorOption from "./ConnectorOption";
 import WebsiteDepthOptions from "./Connectors/WebsiteDepth";
 import ObsidianOptions from "./Connectors/Obsidian";
@@ -70,7 +70,7 @@ export const getDataConnectors = (t) => ({
   },
 });
 
-export default function DataConnectors() {
+export default function DataConnectors({ onImport }) {
   const { t } = useTranslation();
   const [selectedConnector, setSelectedConnector] = useState("github");
   const [searchQuery, setSearchQuery] = useState("");
@@ -120,7 +120,11 @@ export default function DataConnectors() {
       </div>
       <div className="xl:block hidden absolute left-1/2 top-0 bottom-0 w-[0.5px] bg-white/20 -translate-x-1/2"></div>
       <div className="w-full p-4 pb-8 top-0 text-white min-w-[500px] overflow-y-auto h-full">
-        {DATA_CONNECTORS[selectedConnector].options}
+        {cloneElement(DATA_CONNECTORS[selectedConnector].options, {
+          onImport: onImport
+            ? (args) => onImport(selectedConnector, args)
+            : undefined,
+        })}
       </div>
     </div>
   );

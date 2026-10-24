@@ -46,6 +46,12 @@ export default function PromptInput({
   workspaceSlug = null,
   threadSlug = null,
   reasoningSessionSlug = null,
+  storageKey = null,
+  capabilities = {},
+  resourceApi = undefined,
+  loadCapabilities = undefined,
+  disabled = false,
+  sendLabel,
 }) {
   const { t } = useTranslation();
   const { showAgentCommand = true } = workspace ?? {};
@@ -72,6 +78,7 @@ export default function PromptInput({
     setPromptInput,
     workspaceSlug: workspaceSlug ?? workspace?.slug,
     threadSlug,
+    storageKey,
   });
 
   /*
@@ -80,7 +87,10 @@ export default function PromptInput({
    * automatically when the component mounts.
    */
   useEffect(() => {
-    if (searchParams.get("action") === "set-agent-chat") {
+    if (
+      capabilities.tools !== false &&
+      searchParams.get("action") === "set-agent-chat"
+    ) {
       sendCommand({ text: "@agent " });
       textareaRef.current?.focus();
     }
@@ -184,6 +194,7 @@ export default function PromptInput({
     // "/" toggles the Tools menu only when the input is empty
     if (
       event.key === "/" &&
+      capabilities.tools !== false &&
       !event.ctrlKey &&
       !event.metaKey &&
       promptInput.trim() === ""
@@ -198,7 +209,7 @@ export default function PromptInput({
     // Is simple enter key press w/o shift key
     if (event.keyCode === 13 && !event.shiftKey) {
       event.preventDefault();
-      if (isStreaming || isDisabled) return; // Prevent submission if streaming or disabled
+      if (isStreaming || isDisabled || disabled) return;
       setShowTools(false);
       return submit(event);
     }
@@ -265,7 +276,9 @@ export default function PromptInput({
     if (e.clipboardData.items.length === 0) return false;
 
     // paste any clipboard items that are images.
-    for (const item of e.clipboardData.items) {
+    for (const item of capabilities.attachments === false
+      ? []
+      : e.clipboardData.items) {
       if (item.type.startsWith("image/")) {
         const file = item.getAsFile();
         window.dispatchEvent(
@@ -344,20 +357,23 @@ export default function PromptInput({
           className={`flex items-center rounded-lg md:w-full ${centered ? "mb-0" : "mb-4"}`}
         >
           <div className="relative w-[95vw] md:w-[750px]">
-            <ToolsMenu
-              workspace={workspace}
-              showing={showTools}
-              setShowing={setShowTools}
-              sendCommand={sendCommand}
-              promptRef={textareaRef}
-              centered={centered}
-              highlightedIndexRef={toolsHighlightRef}
-            />
+            {capabilities.tools !== false && (
+              <ToolsMenu
+                workspace={workspace}
+                showing={showTools}
+                setShowing={setShowTools}
+                sendCommand={sendCommand}
+                promptRef={textareaRef}
+                centered={centered}
+                highlightedIndexRef={toolsHighlightRef}
+              />
+            )}
             <div className="bg-zinc-800 light:bg-white light:border light:border-slate-300 rounded-[20px] pwa:rounded-3xl flex flex-col px-5 overflow-hidden">
               <AttachmentManager attachments={attachments} />
               <div className="flex items-center">
                 <textarea
                   id={PROMPT_INPUT_ID}
+                  aria-label={t("chat_window.send_message")}
                   ref={textareaRef}
                   onChange={handleChange}
                   onKeyDown={captureEnterOrUndo}
@@ -380,28 +396,40 @@ export default function PromptInput({
               <div className="flex justify-between items-center pt-3.5 pb-3">
                 <div className="flex items-center gap-x-0.25">
                   <div className="flex items-center gap-x-1">
-                    <AttachItem
-                      workspaceSlug={workspaceSlug}
-                      workspaceThreadSlug={threadSlug}
-                    />
+                    {capabilities.attachments !== false && (
+                      <AttachItem
+                        workspaceSlug={workspaceSlug}
+                        workspaceThreadSlug={threadSlug}
+                        resourceApi={resourceApi}
+                      />
+                    )}
                     <AgentSessionButton
                       sendCommand={sendCommand}
                       promptInput={promptInput}
                       textareaRef={textareaRef}
-                      visible={!agentSessionActive & showAgentCommand}
+                      visible={
+                        capabilities.tools !== false &&
+                        !agentSessionActive &&
+                        showAgentCommand
+                      }
                     />
-                    <ReasoningEffortButton
-                      workspaceSlug={workspaceSlug ?? workspace?.slug}
-                      threadSlug={reasoningSessionSlug ?? threadSlug}
-                      centered={centered}
-                    />
+                    {capabilities.reasoning !== false && (
+                      <ReasoningEffortButton
+                        loadCapabilities={loadCapabilities}
+                        workspaceSlug={workspaceSlug ?? workspace?.slug}
+                        threadSlug={reasoningSessionSlug ?? threadSlug}
+                        centered={centered}
+                      />
+                    )}
                   </div>
-                  <ToolsButton
-                    showTools={showTools}
-                    setShowTools={setShowTools}
-                    textareaRef={textareaRef}
-                    autoOpenedToolsRef={autoOpenedToolsRef}
-                  />
+                  {capabilities.tools !== false && (
+                    <ToolsButton
+                      showTools={showTools}
+                      setShowTools={setShowTools}
+                      textareaRef={textareaRef}
+                      autoOpenedToolsRef={autoOpenedToolsRef}
+                    />
+                  )}
                 </div>
                 <div className="flex gap-x-2 items-center">
                   <SpeechToText sendCommand={sendCommand} />
@@ -411,7 +439,8 @@ export default function PromptInput({
                     <SendPromptButton
                       formRef={formRef}
                       promptInput={promptInput}
-                      isDisabled={isDisabled}
+                      isDisabled={isDisabled || disabled}
+                      sendLabel={sendLabel}
                     />
                   )}
                 </div>
@@ -503,8 +532,9 @@ function ToolsButton({
   );
 }
 
-function SendPromptButton({ formRef, promptInput, isDisabled }) {
+function SendPromptButton({ formRef, promptInput, isDisabled, sendLabel }) {
   const { t } = useTranslation();
+  const label = sendLabel ?? t("chat_window.send");
 
   return (
     <>
@@ -519,17 +549,15 @@ function SendPromptButton({ formRef, promptInput, isDisabled }) {
         }`}
         data-tooltip-id="send-prompt"
         data-tooltip-content={
-          isDisabled
-            ? t("chat_window.attachments_processing")
-            : t("chat_window.send")
+          isDisabled ? t("chat_window.attachments_processing") : label
         }
-        aria-label={t("chat_window.send")}
+        aria-label={label}
       >
         <ArrowUp
           className="w-[18px] h-[18px] pointer-events-none text-zinc-800 light:text-white"
           weight="bold"
         />
-        <span className="sr-only">{t("chat_window.send")}</span>
+        <span className="sr-only">{label}</span>
       </button>
       <Tooltip
         id="send-prompt"

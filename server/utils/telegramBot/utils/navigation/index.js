@@ -8,6 +8,11 @@ const { resolveCallbackHandler } = require("./callbacks");
  * @param {object} [options={}] - Optional dependencies that specific handlers may need
  */
 async function handleKeyboardQueryCallback(ctx, query, options = {}) {
+  if (
+    query.message?.chat?.type !== "private" ||
+    String(query.from?.id) !== String(query.message.chat.id)
+  )
+    return;
   const chatId = query.message.chat.id;
   const messageId = query.message.message_id;
   const data = query.data;
@@ -20,6 +25,7 @@ async function handleKeyboardQueryCallback(ctx, query, options = {}) {
   }
 
   try {
+    await ctx.identity(chatId);
     const handler = resolveCallbackHandler(data);
     if (!handler) throw new Error(`Callback handler not found: ${data}`);
     await handler({ ctx, chatId, query, messageId, data, ...options });

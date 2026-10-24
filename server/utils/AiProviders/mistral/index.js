@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -12,17 +16,17 @@ const {
 
 class MistralLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.MISTRAL_API_KEY)
-      throw new Error("No Mistral API key was set.");
+    if (!env.MISTRAL_API_KEY) throw new Error("No Mistral API key was set.");
 
     this.className = "MistralLLM";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.mistral.ai/v1",
-      apiKey: process.env.MISTRAL_API_KEY ?? null,
-    });
-    this.model =
-      modelPreference || process.env.MISTRAL_MODEL_PREF || "mistral-tiny";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.mistral.ai/v1",
+        apiKey: env.MISTRAL_API_KEY ?? null,
+      })
+    );
+    this.model = modelPreference || env.MISTRAL_MODEL_PREF || "mistral-tiny";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

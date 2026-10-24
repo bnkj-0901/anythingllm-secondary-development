@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
 import BrowserExtensionApiKey from "@/models/browserExtensionApiKey";
+import ExecutionIdentity from "@/components/lib/ExecutionIdentity";
 import { fullApiUrl, POPUP_BROWSER_EXTENSION_EVENT } from "@/utils/constants";
 import {
   ModalHeader,
@@ -17,15 +18,19 @@ export default function NewBrowserExtensionApiKeyModal({
   const [apiKey, setApiKey] = useState(null);
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [execution, setExecution] = useState({ tenantId: "", userId: "" });
 
   const handleCreate = async (e) => {
     setError(null);
     e.preventDefault();
 
-    const { apiKey: newApiKey, error } =
-      await BrowserExtensionApiKey.generateKey();
+    const {
+      apiKey: newApiKey,
+      error,
+      apiOrigin,
+    } = await BrowserExtensionApiKey.generateKey(execution);
     if (!!newApiKey) {
-      const fullApiKey = `${fullApiUrl()}|${newApiKey}`;
+      const fullApiKey = `${apiOrigin ? `${apiOrigin}/api` : fullApiUrl()}|${newApiKey}`;
       setApiKey(fullApiKey);
       onSuccess();
 
@@ -57,6 +62,9 @@ export default function NewBrowserExtensionApiKeyModal({
     <form onSubmit={handleCreate} className="flex flex-col gap-y-5">
       <ModalHeader title="New Browser Extension API Key" onClose={closeModal} />
       <ModalBody>
+        {!apiKey && (
+          <ExecutionIdentity value={execution} onChange={setExecution} />
+        )}
         {error && <p className="text-red-400 text-sm">Error: {error}</p>}
         {apiKey && (
           <input
@@ -69,8 +77,8 @@ export default function NewBrowserExtensionApiKeyModal({
         {isMultiUser && (
           <p className="text-yellow-300 light:text-orange-500 text-xs md:text-sm font-semibold">
             Warning: You are in multi-user mode, this API key will allow access
-            to all workspaces associated with your account. Please share it
-            cautiously.
+            to all authorized knowledge libraries of the selected user. Please
+            share it cautiously.
           </p>
         )}
         <p className="text-xs text-zinc-400 light:text-slate-600">

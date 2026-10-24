@@ -35,7 +35,7 @@ async function handleToolApproval({
     const requestId = parts[2];
 
     const pending = pendingToolApprovals.get(requestId);
-    if (!pending) {
+    if (!pending || String(pending.chatId) !== String(chatId)) {
       _log(`No pending approval found for requestId: ${requestId}`);
       await ctx.bot.answerCallbackQuery(query.id, {
         text: "This approval request has expired.",

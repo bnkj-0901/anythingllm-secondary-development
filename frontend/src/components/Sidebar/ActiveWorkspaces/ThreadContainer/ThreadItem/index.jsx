@@ -23,16 +23,23 @@ export default function ThreadItem({
   toggleMarkForDeletion,
   hasNext,
   ctrlPressed = false,
+  href,
+  onSelect,
+  onDelete,
+  onRename,
+  disabled = false,
 }) {
   const { slug: urlSlug, threadSlug = null } = useParams();
   const workspaceSlug = workspace?.slug ?? urlSlug;
   const optionsContainer = useRef(null);
   const [showOptions, setShowOptions] = useState(false);
-  const linkTo = thread.virtual
-    ? "/"
-    : !thread.slug
-      ? paths.workspace.chat(workspaceSlug)
-      : paths.workspace.thread(workspaceSlug, thread.slug);
+  const linkTo =
+    href ??
+    (thread.virtual
+      ? "/"
+      : !thread.slug
+        ? paths.workspace.chat(workspaceSlug)
+        : paths.workspace.thread(workspaceSlug, thread.slug));
 
   const { ref } = useScrollActiveItemIntoView({
     isActive,
@@ -103,6 +110,27 @@ export default function ThreadItem({
             data-tooltip-content={thread.name}
             className="w-full pl-2 py-1 overflow-hidden"
             aria-current={isActive ? "page" : ""}
+            aria-disabled={disabled || undefined}
+            onClick={
+              onSelect
+                ? (event) => {
+                    if (disabled) {
+                      event.preventDefault();
+                      return;
+                    }
+                    if (
+                      event.button !== 0 ||
+                      event.metaKey ||
+                      event.ctrlKey ||
+                      event.shiftKey ||
+                      event.altKey
+                    )
+                      return;
+                    event.preventDefault();
+                    onSelect(thread);
+                  }
+                : undefined
+            }
           >
             <p
               className={`text-left text-sm truncate max-w-[150px] ${
@@ -138,6 +166,7 @@ export default function ThreadItem({
                   className="border-none"
                   onClick={() => setShowOptions(!showOptions)}
                   aria-label="Thread options"
+                  disabled={disabled}
                 >
                   <DotsThree
                     className="text-slate-300 light:text-theme-text-secondary hover:text-white hover:light:text-theme-text-primary"
@@ -154,6 +183,8 @@ export default function ThreadItem({
                 onRemove={onRemove}
                 close={() => setShowOptions(false)}
                 currentThreadSlug={threadSlug}
+                onDelete={onDelete}
+                onRename={onRename}
               />
             )}
           </div>
@@ -170,6 +201,8 @@ function OptionsMenu({
   onRemove,
   close,
   currentThreadSlug,
+  onDelete,
+  onRename,
 }) {
   const navigate = useNavigate();
   const menuRef = useRef(null);
@@ -214,6 +247,10 @@ function OptionsMenu({
       close();
       return;
     }
+    if (onRename) {
+      close();
+      return onRename(thread, name);
+    }
 
     const { message } = await Workspace.threads.update(
       workspace.slug,
@@ -233,6 +270,10 @@ function OptionsMenu({
   };
 
   const handleDelete = async () => {
+    if (onDelete) {
+      close();
+      return onDelete(thread);
+    }
     if (
       !window.confirm(
         "Are you sure you want to delete this thread? All of its chats will be deleted. You cannot undo this."

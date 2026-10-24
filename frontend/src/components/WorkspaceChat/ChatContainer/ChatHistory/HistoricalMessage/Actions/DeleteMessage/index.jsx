@@ -16,7 +16,7 @@ export function useWatchDeleteMessage({ chatId = null, role = "user" }) {
     if (isDeleted && !deleteCalled.current) {
       deleteCalled.current = true;
       if (role === "assistant") {
-        Workspace.deleteChat(chatId);
+        (context?.deleteChat || Workspace.deleteChat)(chatId);
       }
     }
   }, [isDeleted, chatId, role]);

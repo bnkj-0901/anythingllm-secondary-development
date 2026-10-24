@@ -3,8 +3,8 @@
 process.env.NTBA_FIX_350 = 1;
 const TelegramBot = require("node-telegram-bot-api");
 const { log, conclude } = require("./helpers/index.js");
-const { Workspace } = require("../models/workspace");
-const { WorkspaceThread } = require("../models/workspaceThread");
+const { context } = require("../enterprise/auth");
+const { ChatThread } = require("../models/workspaceThread");
 const { streamResponse } = require("../utils/telegramBot/chat/stream");
 
 process.on("message", async (payload) => {
@@ -14,8 +14,9 @@ process.on("message", async (payload) => {
   const {
     botToken,
     chatId,
-    workspaceSlug,
-    threadSlug,
+    tenantId,
+    userId,
+    conversationId,
     message,
     attachments = [],
     voiceResponse = false,
@@ -29,29 +30,65 @@ process.on("message", async (payload) => {
         log(args.length ? `${text} ${args.join(" ")}` : text),
     };
 
-    const workspace = await Workspace.get({ slug: workspaceSlug });
-    if (!workspace) {
-      await bot.sendMessage(
-        chatId,
-        "No workspace configured. Use /switch to select one."
+    const identity = await context(userId);
+    if (identity.tenantId !== tenantId)
+      throw new Error("Invalid Telegram execution identity");
+    const connector =
+      await require("../models/externalCommunicationConnector").ExternalCommunicationConnector.get(
+        "telegram",
+        tenantId
       );
-      conclude();
-      return;
-    }
-
-    const thread = threadSlug
-      ? await WorkspaceThread.get({ slug: threadSlug })
-      : null;
-
-    await streamResponse({
-      ctx,
-      chatId,
-      workspace,
-      thread,
-      message,
-      attachments,
-      voiceResponse,
+    if (
+      !connector?.active ||
+      !connector.config.approved_users?.some(
+        (u) => String(u.chatId) === String(chatId) && u.userId === userId
+      )
+    )
+      throw new Error("Telegram binding revoked");
+    // Buffered edits, generated files and voice replies are authorization exits
+    // too. Check the live binding immediately before every Telegram write.
+    ctx.bot = new Proxy(bot, {
+      get(target, key) {
+        const value = target[key];
+        if (typeof value !== "function") return value;
+        if (!/^(send|editMessage|answerCallback)/.test(String(key)))
+          return value.bind(target);
+        return async (...args) => {
+          const live = await context(userId);
+          const row =
+            await require("../models/externalCommunicationConnector").ExternalCommunicationConnector.get(
+              "telegram",
+              tenantId
+            );
+          if (
+            live.tenantId !== tenantId ||
+            live.authVersion !== identity.authVersion ||
+            !row?.active ||
+            !row.config.approved_users?.some(
+              (u) => String(u.chatId) === String(chatId) && u.userId === userId
+            )
+          )
+            throw new Error("Telegram binding revoked");
+          return value.apply(target, args);
+        };
+      },
     });
+    const thread = await ChatThread.get(identity, { id: conversationId });
+    if (!thread) throw new Error("Personal conversation not found");
+
+    await require("../enterprise/execution-context").runExecution(
+      identity,
+      () =>
+        streamResponse({
+          ctx,
+          chatId,
+          identity,
+          thread,
+          message,
+          attachments,
+          voiceResponse,
+        })
+    );
   } catch (error) {
     log(`Telegram chat error: ${error.message}`);
     try {

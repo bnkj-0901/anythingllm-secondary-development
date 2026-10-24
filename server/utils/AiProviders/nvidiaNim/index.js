@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -12,17 +16,19 @@ const {
 
 class NvidiaNimLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.NVIDIA_NIM_LLM_BASE_PATH)
+    if (!env.NVIDIA_NIM_LLM_BASE_PATH)
       throw new Error("No NVIDIA NIM API Base Path was set.");
 
     this.className = "NvidiaNimLLM";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.nvidiaNim = new OpenAIApi({
-      baseURL: parseNvidiaNimBasePath(process.env.NVIDIA_NIM_LLM_BASE_PATH),
-      apiKey: null,
-    });
+    this.nvidiaNim = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseNvidiaNimBasePath(env.NVIDIA_NIM_LLM_BASE_PATH),
+        apiKey: null,
+      })
+    );
 
-    this.model = modelPreference || process.env.NVIDIA_NIM_LLM_MODEL_PREF;
+    this.model = modelPreference || env.NVIDIA_NIM_LLM_MODEL_PREF;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -60,12 +66,14 @@ class NvidiaNimLLM {
   static async setModelTokenLimit(modelId, basePath = null) {
     if (!modelId) return;
     const { OpenAI: OpenAIApi } = require("openai");
-    const openai = new OpenAIApi({
-      baseURL: parseNvidiaNimBasePath(
-        basePath || process.env.NVIDIA_NIM_LLM_BASE_PATH
-      ),
-      apiKey: null,
-    });
+    const openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseNvidiaNimBasePath(
+          basePath || env.NVIDIA_NIM_LLM_BASE_PATH
+        ),
+        apiKey: null,
+      })
+    );
     const model = await openai.models
       .list()
       .then((results) => results.data)
@@ -76,7 +84,7 @@ class NvidiaNimLLM {
     if (!model.length) return;
     const modelInfo = model.find((model) => model.id === modelId);
     if (!modelInfo) return;
-    process.env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT = Number(
+    env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT = Number(
       modelInfo.max_model_len || 4096
     );
   }
@@ -86,7 +94,7 @@ class NvidiaNimLLM {
   }
 
   static promptWindowLimit(_modelName) {
-    const limit = process.env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No NVIDIA NIM token context limit was set.");
     return Number(limit);
@@ -95,7 +103,7 @@ class NvidiaNimLLM {
   // Ensure the user set a value for the token limit
   // and if undefined - assume 4096 window.
   promptWindowLimit() {
-    const limit = process.env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.NVIDIA_NIM_LLM_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No NVIDIA NIM token context limit was set.");
     return Number(limit);

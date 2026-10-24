@@ -1,5 +1,6 @@
 import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
+const historyPath = (scope) => `${API_BASE}/enterprise/platform/tenants/${encodeURIComponent(scope)}/prompt-history`;
 
 /**
  * @typedef {Object} PromptHistory
@@ -20,7 +21,7 @@ const PromptHistory = {
   forWorkspace: async function (workspaceId) {
     try {
       return await fetch(
-        `${API_BASE}/workspace/${workspaceId}/prompt-history`,
+        historyPath(workspaceId),
         {
           method: "GET",
           headers: baseHeaders(),
@@ -46,7 +47,7 @@ const PromptHistory = {
   clearAll: async function (workspaceId) {
     try {
       return await fetch(
-        `${API_BASE}/workspace/${workspaceId}/prompt-history`,
+        historyPath(workspaceId),
         {
           method: "DELETE",
           headers: baseHeaders(),
@@ -66,7 +67,7 @@ const PromptHistory = {
   delete: async function (workspaceId, id) {
     try {
       return await fetch(
-        `${API_BASE}/workspace/${workspaceId}/prompt-history/${id}`,
+        `${historyPath(workspaceId)}/${encodeURIComponent(id)}`,
         {
           method: "DELETE",
           headers: baseHeaders(),

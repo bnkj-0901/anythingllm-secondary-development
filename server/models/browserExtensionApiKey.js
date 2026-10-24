@@ -1,5 +1,4 @@
 const prisma = require("../utils/prisma");
-const { SystemSettings } = require("./systemSettings");
 const { ROLES } = require("../utils/middleware/multiUserProtected");
 
 const BrowserExtensionApiKey = {
@@ -17,12 +16,13 @@ const BrowserExtensionApiKey = {
    * @param {number|null} userId - User id to associate creation of key with.
    * @returns {Promise<{apiKey: import("@prisma/client").browser_extension_api_keys|null, error:string|null}>}
    */
-  create: async function (userId = null) {
+  create: async function (userId, tenantId) {
     try {
       const apiKey = await prisma.browser_extension_api_keys.create({
         data: {
           key: this.makeSecret(),
           user_id: userId,
+          tenantId,
         },
       });
       return { apiKey, error: null };
@@ -41,14 +41,10 @@ const BrowserExtensionApiKey = {
     if (!key.startsWith("brx-")) return false;
     const apiKey = await prisma.browser_extension_api_keys.findUnique({
       where: { key: key.toString() },
-      include: { user: true },
+      include: { user: { select: { id: true, username: true, role: true } } },
     });
     if (!apiKey) return false;
 
-    const multiUserMode = await SystemSettings.isMultiUserMode();
-    if (!multiUserMode) return apiKey; // In single-user mode, all keys are valid
-
-    // In multi-user mode, check if the key is associated with a user
     return apiKey.user_id ? apiKey : false;
   },
 
@@ -96,7 +92,7 @@ const BrowserExtensionApiKey = {
     try {
       if (!userId) return { success: false, error: "User ID is required" };
       await prisma.browser_extension_api_keys.deleteMany({
-        where: { user_id: parseInt(userId) },
+        where: { user_id: Number(userId) },
       });
       return { success: true, error: null };
     } catch (error) {
@@ -121,7 +117,7 @@ const BrowserExtensionApiKey = {
         where: clause,
         ...(limit !== null ? { take: limit } : {}),
         ...(orderBy !== null ? { orderBy } : {}),
-        include: { user: true },
+        include: { user: { select: { id: true, username: true, role: true } } },
       });
       return apiKeys;
     } catch (error) {
@@ -146,7 +142,11 @@ const BrowserExtensionApiKey = {
   ) {
     // Admin can view and use any keys
     if ([ROLES.admin].includes(user.role))
-      return await this.where(clause, limit, orderBy);
+      return await this.where(
+        { ...clause, tenantId: user.tenantId },
+        limit,
+        orderBy
+      );
 
     try {
       const apiKeys = await prisma.browser_extension_api_keys.findMany({
@@ -154,7 +154,7 @@ const BrowserExtensionApiKey = {
           ...clause,
           user_id: user.id,
         },
-        include: { user: true },
+        include: { user: { select: { id: true, username: true, role: true } } },
         ...(limit !== null ? { take: limit } : {}),
         ...(orderBy !== null ? { orderBy } : {}),
       });
@@ -162,27 +162,6 @@ const BrowserExtensionApiKey = {
     } catch (error) {
       console.error(error.message);
       return [];
-    }
-  },
-
-  /**
-   * Updates owner of all DB ids to new admin.
-   * @param {number} userId
-   * @returns {Promise<void>}
-   */
-  migrateApiKeysToMultiUser: async function (userId) {
-    try {
-      await prisma.browser_extension_api_keys.updateMany({
-        where: {
-          user_id: null,
-        },
-        data: {
-          user_id: userId,
-        },
-      });
-      console.log("Successfully migrated API keys to multi-user mode");
-    } catch (error) {
-      console.error("Error migrating API keys to multi-user mode:", error);
     }
   },
 };

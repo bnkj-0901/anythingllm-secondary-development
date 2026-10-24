@@ -1,29 +1,10 @@
 const { ApiKey } = require("../../models/apiKeys");
-const { SystemSettings } = require("../../models/systemSettings");
-
-async function validApiKey(request, response, next) {
-  const multiUserMode = await SystemSettings.isMultiUserMode();
-  response.locals.multiUserMode = multiUserMode;
-
-  const auth = request.header("Authorization");
-  const bearerKey = auth ? auth.split(" ")[1] : null;
-  if (!bearerKey) {
-    response.status(403).json({
-      error: "No valid api key found.",
-    });
-    return;
-  }
-
-  if (!(await ApiKey.get({ secret: bearerKey }))) {
-    response.status(403).json({
-      error: "No valid api key found.",
-    });
-    return;
-  }
-
+const { bindIdentity, wrap } = require("./externalIdentity");
+const validApiKey = wrap(async (req, res, next) => {
+  const secret = (req.headers.authorization || "").replace(/^Bearer /i, "");
+  const key = secret ? await ApiKey.get({ secret }) : null;
+  await bindIdentity(req, res, key, key?.userId);
+  res.locals.apiKey = key;
   next();
-}
-
-module.exports = {
-  validApiKey,
-};
+});
+module.exports = { validApiKey };

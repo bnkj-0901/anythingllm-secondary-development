@@ -1,20 +1,26 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 class OpenRouterEmbedder {
   constructor() {
-    if (!process.env.OPENROUTER_API_KEY)
+    if (!env.OPENROUTER_API_KEY)
       throw new Error("No OpenRouter API key was set.");
     this.className = "OpenRouterEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: "https://openrouter.ai/api/v1",
-      apiKey: process.env.OPENROUTER_API_KEY,
-      defaultHeaders: {
-        "HTTP-Referer": "https://anythingllm.com",
-        "X-Title": "AnythingLLM",
-      },
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF || "baai/bge-m3";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://openrouter.ai/api/v1",
+        apiKey: env.OPENROUTER_API_KEY,
+        defaultHeaders: {
+          "HTTP-Referer": "https://anythingllm.com",
+          "X-Title": "AnythingLLM",
+        },
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF || "baai/bge-m3";
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 500;

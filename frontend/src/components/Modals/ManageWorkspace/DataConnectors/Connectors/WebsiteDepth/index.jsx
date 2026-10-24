@@ -4,7 +4,7 @@ import showToast from "@/utils/toast";
 import pluralize from "pluralize";
 import { useTranslation } from "react-i18next";
 
-export default function WebsiteDepthOptions() {
+export default function WebsiteDepthOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
 
@@ -19,7 +19,9 @@ export default function WebsiteDepthOptions() {
         autoClose: false,
       });
 
-      const { data, error } = await System.dataConnectors.websiteDepth.scrape({
+      const { data, error } = await (
+        onImport || System.dataConnectors.websiteDepth.scrape
+      )({
         url: form.get("url"),
         depth: parseInt(form.get("depth")),
         maxLinks: parseInt(form.get("maxLinks")),
@@ -27,6 +29,12 @@ export default function WebsiteDepthOptions() {
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

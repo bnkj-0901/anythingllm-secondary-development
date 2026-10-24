@@ -3,10 +3,13 @@ const AgentPlugins = require("./aibitat/plugins");
 const {
   WorkspaceAgentInvocation,
 } = require("../../models/workspaceAgentInvocation");
-const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
-const { User } = require("../../models/user");
-const { Workspace } = require("../../models/workspace");
-const { WorkspaceChats } = require("../../models/workspaceChats");
+const { ParsedFiles } = require("../../models/workspaceParsedFiles");
+const {
+  loadExecutionContext,
+  runExecution,
+} = require("../../enterprise/execution-context");
+const { Chat } = require("../../models/workspaceChats");
+const { ChatThread } = require("../../models/workspaceThread");
 const { safeJsonParse } = require("../http");
 const {
   USER_AGENT,
@@ -24,7 +27,6 @@ const {
   resolveReasoningEffort,
   usesModelRouter,
 } = require("../helpers/reasoningEffort");
-const { DocumentManager } = require("../DocumentManager");
 
 class AgentHandler {
   #invocationUUID;
@@ -39,7 +41,8 @@ class AgentHandler {
   model = null;
   attachments = [];
 
-  constructor({ uuid }) {
+  constructor({ uuid, ctx = null }) {
+    this.ctx = ctx;
     this.#invocationUUID = uuid;
   }
 
@@ -69,10 +72,44 @@ class AgentHandler {
     if (this.#isAgentCommandInvocation({ message })) return true;
     if (chatMode === "automatic") {
       if (!workspace) return false;
-      if (await Workspace.supportsNativeToolCalling(workspace)) return true;
+      if (await this.supportsNativeToolCalling(workspace)) return true;
       return false;
     }
     return false;
+  }
+
+  static async supportsNativeToolCalling(configuration = {}) {
+    const provider =
+      configuration.agentProvider ??
+      configuration.chatProvider ??
+      process.env.LLM_PROVIDER;
+    if (provider === "anythingllm-router") {
+      const router = await require("../../models/modelRouter").ModelRouter.get({
+        id: configuration.router_id || Number(process.env.MODEL_ROUTER_ID),
+      });
+      if (!router) return false;
+      const config = {
+        provider: router.fallback_provider,
+        model: router.fallback_model,
+      };
+      return (
+        (await new AIbitat(config)
+          .getProviderForConfig(config)
+          .supportsNativeToolCalling?.()) ?? false
+      );
+    }
+    const config = {
+      provider,
+      model:
+        configuration.agentModel ??
+        configuration.chatModel ??
+        require("../helpers").getBaseLLMProviderModel({ provider }),
+    };
+    return (
+      (await new AIbitat(config)
+        .getProviderForConfig(config)
+        .supportsNativeToolCalling?.()) ?? false
+    );
   }
 
   /**
@@ -89,17 +126,11 @@ class AgentHandler {
   async #chatHistory(limit = 10) {
     try {
       const rawHistory = (
-        await WorkspaceChats.where(
-          {
-            workspaceId: this.invocation.workspace_id,
-            user_id: this.invocation.user_id || null,
-            thread_id: this.invocation.thread_id || null,
-            api_session_id: null,
-            include: true,
-          },
+        await Chat.forThread(this.ctx, this.invocation.thread_id, {
+          include: true,
           limit,
-          { id: "desc" }
-        )
+          orderBy: { id: "desc" },
+        })
       ).reverse();
 
       const { chatHistoryAttachments } = require("../files");
@@ -425,18 +456,15 @@ class AgentHandler {
   #getFallbackProvider() {
     // If workspace chat uses the model router, fall back to it.
     // Model is null here since the router determines it at resolve time.
-    if (this.invocation.workspace.chatProvider === "anythingllm-router") {
+    if (this.configuration.chatProvider === "anythingllm-router") {
       return { provider: "anythingllm-router", model: null };
     }
 
     // First, fallback to the workspace chat provider and model if they exist
-    if (
-      this.invocation.workspace.chatProvider &&
-      this.invocation.workspace.chatModel
-    ) {
+    if (this.configuration.chatProvider && this.configuration.chatModel) {
       return {
-        provider: this.invocation.workspace.chatProvider,
-        model: this.invocation.workspace.chatModel,
+        provider: this.configuration.chatProvider,
+        model: this.configuration.chatModel,
       };
     }
 
@@ -476,8 +504,7 @@ class AgentHandler {
     }
 
     // The provider was explicitly set, so check if the workspace has an agent model set.
-    if (this.invocation.workspace.agentModel)
-      return this.invocation.workspace.agentModel;
+    if (this.configuration.agentModel) return this.configuration.agentModel;
 
     // Otherwise, we have no model to use - so guess a default model to use via the provider
     // and it's system ENV params and if that fails - we return either a base model or null.
@@ -485,7 +512,7 @@ class AgentHandler {
   }
 
   async #providerSetupAndCheck(prompt = null) {
-    this.provider = this.invocation.workspace.agentProvider ?? null; // set provider to workspace agent provider if it exists
+    this.provider = this.configuration.agentProvider ?? null; // set provider to workspace agent provider if it exists
     this.model = this.#fetchModel();
 
     // If provider resolved to model router, resolve the actual provider/model
@@ -500,10 +527,10 @@ class AgentHandler {
 
   async #resolveRouterProvider(prompt = null) {
     const { AnythingLLMModelRouter } = require("../AiProviders/modelRouter");
-    const routerWorkspace = this.invocation.workspace.router_id
-      ? this.invocation.workspace
+    const routerWorkspace = this.configuration.router_id
+      ? this.configuration
       : {
-          ...this.invocation.workspace,
+          ...this.configuration,
           router_id: process.env.MODEL_ROUTER_ID
             ? Number(process.env.MODEL_ROUTER_ID)
             : null,
@@ -514,8 +541,7 @@ class AgentHandler {
     let thread = null;
     if (this.invocation.thread_id) {
       if (!this._threadSlug) {
-        const { WorkspaceThread } = require("../../models/workspaceThread");
-        const threadRecord = await WorkspaceThread.get({
+        const threadRecord = await ChatThread.get(this.ctx, {
           id: this.invocation.thread_id,
         });
         this._threadSlug = threadRecord?.slug || null;
@@ -525,14 +551,14 @@ class AgentHandler {
 
     const router = new AnythingLLMModelRouter(routerWorkspace);
     const { ModelRouterService } = require("../router");
-    const workspace = this.invocation.workspace;
+    const workspace = this.configuration;
     const user = this.invocation.user_id
       ? { id: this.invocation.user_id }
       : null;
     const effectivePrompt = prompt || this.invocation.prompt;
     const ctx = await ModelRouterService.gatherRoutingContext({
-      workspace,
-      user,
+      ctx: this.ctx,
+      configuration: workspace,
       thread: this.invocation.thread_id
         ? { id: this.invocation.thread_id }
         : null,
@@ -546,7 +572,7 @@ class AgentHandler {
         conversationMessageCount: ctx.conversationMessageCount,
         attachments: this.attachments || [],
       },
-      { user, thread }
+      { user, thread, ctx: this.ctx }
     );
 
     this.provider = router.resolvedRoute.provider;
@@ -559,12 +585,28 @@ class AgentHandler {
   }
 
   async #validInvocation() {
-    const invocation = await WorkspaceAgentInvocation.getWithWorkspace({
+    const invocation = await WorkspaceAgentInvocation.getWithContext({
       uuid: String(this.#invocationUUID),
     });
     if (invocation?.closed)
       throw new Error("This agent invocation is already closed");
-    this.invocation = invocation ?? null;
+    if (!invocation) return;
+    const ctx = await loadExecutionContext({
+      tenantId: invocation.tenantId,
+      userId: invocation.user_id,
+    });
+    if (
+      this.ctx &&
+      (ctx.tenantId !== this.ctx.tenantId || ctx.userId !== this.ctx.userId)
+    )
+      throw new Error("Agent invocation is not owned by this user.");
+    this.ctx = ctx;
+    await ChatThread.get(ctx, { id: invocation.thread_id }).then((thread) => {
+      if (!thread) throw new Error("Conversation not found.");
+    });
+    this.configuration =
+      await require("../../enterprise/rag-settings").getSettings(ctx.tenantId);
+    this.invocation = invocation;
   }
 
   parseCallOptions(args, config = {}, pluginName) {
@@ -763,15 +805,14 @@ class AgentHandler {
   async #loadAgents() {
     // Default User agent and workspace agent
     this.log(`Attaching user and default agent to Agent cluster.`);
-    const user = this.invocation.user_id
-      ? await User.get({ id: Number(this.invocation.user_id) })
-      : null;
+    const user = this.ctx.user;
     const userAgentDef = await USER_AGENT.getDefinition();
     const workspaceAgentDef = await WORKSPACE_AGENT.getDefinition(
       this.provider,
-      this.invocation.workspace,
+      this.configuration,
       user,
-      this.invocation.prompt
+      this.invocation.prompt,
+      this.ctx
     );
 
     this.aibitat.agent(USER_AGENT.name, userAgentDef);
@@ -784,7 +825,17 @@ class AgentHandler {
 
   async init() {
     await this.#validInvocation();
-    await this.#providerSetupAndCheck();
+    if (!this.invocation) return this;
+    this.connection =
+      await require("../../enterprise/providers").resolveConnection(
+        this.ctx,
+        "chat"
+      );
+    await require("../../enterprise/ai/connection-context").runConnection(
+      this.connection,
+      {},
+      () => this.#providerSetupAndCheck()
+    );
     this.log(`Start ${this.#invocationUUID}::${this.provider}:${this.model}`);
 
     // Retrieve cached attachments (images, etc.) from the HTTP request
@@ -802,23 +853,10 @@ class AgentHandler {
    * @returns {Promise<string>} Formatted context string to append to user message
    */
   async #fetchParsedFileContext() {
-    const user = this.invocation.user_id
-      ? { id: this.invocation.user_id }
-      : null;
-    const thread = this.invocation.thread_id
-      ? { id: this.invocation.thread_id }
-      : null;
-    const documentManager = new DocumentManager({
-      workspace: this.invocation.workspace,
-    });
-
+    await loadExecutionContext(this.ctx);
     return Promise.all([
-      WorkspaceParsedFiles.getContextFiles(
-        this.invocation.workspace,
-        thread,
-        user
-      ),
-      documentManager.pinnedDocs(),
+      ParsedFiles.getContextFiles(this.ctx, this.invocation.thread_id),
+      require("../../models/documents").Document.pinnedContext(this.ctx),
     ])
       .then(([parsedFiles, pinnedDocs]) => {
         const allDocuments = [
@@ -870,7 +908,7 @@ class AgentHandler {
    * @returns {Promise<string|null>}
    */
   async #reasoningEffortForRoute() {
-    if (usesModelRouter(this.invocation.workspace)) return null;
+    if (usesModelRouter(this.configuration)) return null;
     const { getLLMProvider } = require("../helpers");
     return await resolveReasoningEffort(
       () => getLLMProvider({ provider: this.provider, model: this.model }),
@@ -895,6 +933,13 @@ class AgentHandler {
   }
 
   async createAIbitat(
+    args = { socket: null }
+  ) {
+    return require("../../enterprise/ai/connection-context").runConnection(this.connection, {}, () =>
+      runExecution(this.ctx, () => this.#createAIbitat(args)));
+  }
+
+  async #createAIbitat(
     args = {
       socket: null,
     }
@@ -903,11 +948,13 @@ class AgentHandler {
     this.aibitat = new AIbitat({
       provider: this.provider ?? "openai",
       model: this.model ?? "gpt-4.1-nano",
-      temperature: this.invocation.workspace?.openAiTemp,
+      temperature: this.configuration?.openAiTemp,
       reasoningEffort: await this.#reasoningEffortForRoute(),
       chats: await this.#chatHistory(20),
       handlerProps: {
         invocation: this.invocation,
+        ctx: this.ctx,
+        configuration: this.configuration,
         log: this.log,
         routingMetadata: this.routingMetadata || null,
       },
@@ -942,10 +989,11 @@ class AgentHandler {
       }
       try {
         const { provider, model } = this;
-        this.invocation.workspace =
-          (await Workspace._findFirst({
-            where: { id: this.invocation.workspace.id },
-          })) ?? this.invocation.workspace;
+        await loadExecutionContext(this.ctx);
+        this.configuration =
+          await require("../../enterprise/rag-settings").getSettings(
+            this.ctx.tenantId
+          );
         this.routingMetadata = null;
         this._modelRouter = null;
         await this.#providerSetupAndCheck(prompt);
@@ -1019,12 +1067,19 @@ class AgentHandler {
   }
 
   startAgentCluster() {
-    return this.aibitat.start({
-      from: USER_AGENT.name,
-      to: this.channel ?? WORKSPACE_AGENT.name,
-      content: this.#stripAgentCommand(this.invocation.prompt),
-      attachments: this.attachments,
-    });
+    return require("../../enterprise/ai/connection-context").runConnection(
+      this.connection,
+      {},
+      () =>
+        runExecution(this.ctx, () =>
+          this.aibitat.start({
+            from: USER_AGENT.name,
+            to: this.channel ?? WORKSPACE_AGENT.name,
+            content: this.#stripAgentCommand(this.invocation.prompt),
+            attachments: this.attachments,
+          })
+        )
+    );
   }
 }
 

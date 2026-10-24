@@ -1,28 +1,18 @@
 import CTAButton from "@/components/lib/CTAButton";
 import CommunityHubImportItemSteps from "../..";
-import { useEffect, useState } from "react";
-import Workspace from "@/models/workspace";
+import { useState } from "react";
+import { TenantSelection } from "@/components/lib/ExecutionIdentity";
 import showToast from "@/utils/toast";
 import paths from "@/utils/paths";
 import CommunityHub from "@/models/communityHub";
 
 export default function SystemPrompt({ item, setStep }) {
-  const [destinationWorkspaceSlug, setDestinationWorkspaceSlug] =
-    useState(null);
-  const [workspaces, setWorkspaces] = useState([]);
-  useEffect(() => {
-    async function getWorkspaces() {
-      const workspaces = await Workspace.all();
-      setWorkspaces(workspaces);
-      setDestinationWorkspaceSlug(workspaces[0].slug);
-    }
-    getWorkspaces();
-  }, []);
+  const [tenantId, setTenantId] = useState("");
 
   async function handleSubmit() {
-    showToast("Applying system prompt to workspace...", "info");
+    showToast("Applying system prompt to tenant...", "info");
     const { error } = await CommunityHub.applyItem(item.importId, {
-      workspaceSlug: destinationWorkspaceSlug,
+      tenantId,
     });
     if (error) {
       return showToast(`Failed to apply system prompt. ${error}`, "error", {
@@ -30,7 +20,7 @@ export default function SystemPrompt({ item, setStep }) {
       });
     }
 
-    showToast("System prompt applied to workspace.", "success", {
+    showToast("System prompt applied to tenant.", "success", {
       clear: true,
     });
     setStep(CommunityHubImportItemSteps.completed.key);
@@ -59,7 +49,7 @@ export default function SystemPrompt({ item, setStep }) {
       <div className="flex flex-col gap-y-[25px] text-white/80 light:text-theme-text-secondary text-sm">
         <p>
           System prompts are used to guide the behavior of the AI agents and can
-          be applied to any existing workspace.
+          be applied to the selected tenant.
         </p>
 
         <div className="flex flex-col gap-y-2">
@@ -74,31 +64,15 @@ export default function SystemPrompt({ item, setStep }) {
         </div>
 
         <div className="flex flex-col w-60">
-          <label className="text-theme-text-primary text-sm font-semibold block mb-3">
-            Apply to Workspace
-          </label>
-          <select
-            name="destinationWorkspaceSlug"
-            required={true}
-            onChange={(e) => setDestinationWorkspaceSlug(e.target.value)}
-            className="border-none bg-theme-settings-input-bg border-gray-500 text-white text-sm rounded-lg block w-full p-2.5"
-          >
-            <optgroup label="Available workspaces">
-              {workspaces.map((workspace) => (
-                <option key={workspace.id} value={workspace.slug}>
-                  {workspace.name}
-                </option>
-              ))}
-            </optgroup>
-          </select>
+          <TenantSelection value={tenantId} onChange={setTenantId} />
         </div>
       </div>
-      {destinationWorkspaceSlug && (
+      {tenantId && (
         <CTAButton
           className="text-dark-text w-full mt-[18px] h-[34px] hover:bg-accent"
           onClick={handleSubmit}
         >
-          Apply system prompt to workspace
+          Apply system prompt to tenant
         </CTAButton>
       )}
     </div>

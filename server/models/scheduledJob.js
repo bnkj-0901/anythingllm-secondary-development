@@ -55,11 +55,20 @@ const ScheduledJob = {
     }
   },
 
-  create: async function ({ name, prompt, tools = null, schedule } = {}) {
+  create: async function ({
+    name,
+    prompt,
+    tools = null,
+    schedule,
+    tenantId,
+    userId,
+  } = {}) {
     try {
       const nextRunAt = this.computeNextRunAt(schedule);
       const job = await prisma.scheduled_jobs.create({
         data: {
+          tenantId,
+          userId,
           name: String(name),
           prompt: String(prompt),
           tools: tools ? JSON.stringify(tools) : null,

@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { parseLMStudioBasePath } = require("../../AiProviders/lmStudio");
 const {
   maximumChunkLength,
@@ -6,19 +10,21 @@ const {
 
 class LMStudioEmbedder {
   constructor() {
-    if (!process.env.EMBEDDING_BASE_PATH)
+    if (!env.EMBEDDING_BASE_PATH)
       throw new Error("No embedding base path was set.");
-    if (!process.env.EMBEDDING_MODEL_PREF)
+    if (!env.EMBEDDING_MODEL_PREF)
       throw new Error("No embedding model was set.");
 
-    const apiKey = process.env.LMSTUDIO_AUTH_TOKEN ?? null;
+    const apiKey = env.LMSTUDIO_AUTH_TOKEN ?? null;
     this.className = "LMStudioEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.lmstudio = new OpenAIApi({
-      baseURL: parseLMStudioBasePath(process.env.EMBEDDING_BASE_PATH),
-      apiKey,
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF;
+    this.lmstudio = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseLMStudioBasePath(env.EMBEDDING_BASE_PATH),
+        apiKey,
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF;
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 1;

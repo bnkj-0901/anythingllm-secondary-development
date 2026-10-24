@@ -9,8 +9,11 @@ import Highlighter from "react-highlight-words";
 import SystemPromptVariable from "@/models/systemPromptVariable";
 import { Link } from "react-router-dom";
 import paths from "@/utils/paths";
+import useUser from "@/hooks/useUser";
 
 export default function DefaultSystemPrompt() {
+  const { user } = useUser();
+  const isPlatform = user?.identity === "platform";
   const [systemPromptForm, setSystemPromptForm] = useState({
     value: "",
     default: "",
@@ -24,7 +27,7 @@ export default function DefaultSystemPrompt() {
   useEffect(() => {
     async function setupVariableHighlighting() {
       const { variables } = await SystemPromptVariable.getAll();
-      setAvailableVariables(variables);
+      setAvailableVariables(variables || []);
     }
     setupVariableHighlighting();
   }, []);
@@ -123,8 +126,8 @@ export default function DefaultSystemPrompt() {
               </p>
             </div>
             <p className="text-xs leading-[18px] font-base text-theme-text-secondary">
-              This is the default system prompt that will be used for new
-              workspaces.
+              Configure the instructions used for knowledge answers. Tenant
+              instructions override the platform default.
             </p>
           </div>
           <div>
@@ -163,40 +166,37 @@ export default function DefaultSystemPrompt() {
                     <p className="text-white text-opacity-60 text-xs font-medium">
                       A system prompt provides instructions that shape the AI’s
                       responses and behavior. This prompt will be automatically
-                      applied to all newly created workspaces. To change the
-                      system prompt of a{" "}
-                      <span className="font-bold">specific workspace</span>,
-                      edit the prompt in the{" "}
-                      <span className="font-bold">workspace settings</span>. To
-                      restore the system prompt to our sane default, leave this
-                      field empty and save changes.
+                      applied to knowledge answers in the current scope. Leave
+                      this field empty and save to use the inherited default.
                     </p>
-                    <p className="text-white text-opacity-60 text-xs font-medium mb-2">
-                      You can insert{" "}
-                      <Link
-                        to={paths.settings.systemPromptVariables()}
-                        className="text-primary-button"
-                      >
-                        system prompt variables
-                      </Link>{" "}
-                      like:{" "}
-                      {availableVariables.slice(0, 3).map((v, i) => (
-                        <Fragment key={v.key}>
-                          <span className="bg-theme-settings-input-bg px-1 py-0.5 rounded">
-                            {`{${v.key}}`}
-                          </span>
-                          {i < availableVariables.length - 1 && ", "}
-                        </Fragment>
-                      ))}
-                      {availableVariables.length > 3 && (
+                    {isPlatform && (
+                      <p className="text-white text-opacity-60 text-xs font-medium mb-2">
+                        You can insert{" "}
                         <Link
                           to={paths.settings.systemPromptVariables()}
                           className="text-primary-button"
                         >
-                          +{availableVariables.length - 3} more...
-                        </Link>
-                      )}
-                    </p>
+                          system prompt variables
+                        </Link>{" "}
+                        like:{" "}
+                        {availableVariables.slice(0, 3).map((v, i) => (
+                          <Fragment key={v.key}>
+                            <span className="bg-theme-settings-input-bg px-1 py-0.5 rounded">
+                              {`{${v.key}}`}
+                            </span>
+                            {i < availableVariables.length - 1 && ", "}
+                          </Fragment>
+                        ))}
+                        {availableVariables.length > 3 && (
+                          <Link
+                            to={paths.settings.systemPromptVariables()}
+                            className="text-primary-button"
+                          >
+                            +{availableVariables.length - 3} more...
+                          </Link>
+                        )}
+                      </p>
+                    )}
                   </div>
 
                   {systemPromptForm.isEditing ? (

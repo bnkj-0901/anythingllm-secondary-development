@@ -103,7 +103,7 @@ async function asXlsx({
         data: combinedData,
         filename: `${slugify(path.basename(filename))}-${combinedData.id}`,
         destinationOverride: null,
-        options: { parseOnly: true },
+        options: { parseOnly: true, returnDocuments: options.returnDocuments },
       });
       documents.push(document);
       console.log(`[SUCCESS]: ${filename} converted & ready for embedding.`);
@@ -143,7 +143,10 @@ async function asXlsx({
           data: sheetData,
           filename: `sheet-${slugify(name)}-${sheetData.id}`,
           destinationOverride: outFolderPath,
-          options: { parseOnly: options.parseOnly },
+          options: {
+            parseOnly: options.parseOnly,
+            returnDocuments: options.returnDocuments,
+          },
         });
         documents.push(document);
         console.log(

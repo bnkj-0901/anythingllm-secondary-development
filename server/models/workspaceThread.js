@@ -2,18 +2,12 @@ const prisma = require("../utils/prisma");
 const slugifyModule = require("slugify");
 const { v4: uuidv4 } = require("uuid");
 const truncate = require("truncate");
+const { Chat, chatScope } = require("./workspaceChats");
 
-const WorkspaceThread = {
+const ChatThread = {
   defaultName: "Thread",
   writable: ["name"],
 
-  /**
-   * The default Slugify module requires some additional mapping to prevent downstream issues
-   * if the user is able to define a slug externally. We have to block non-escapable URL chars
-   * so that is the slug is rendered it doesn't break the URL or UI when visited.
-   * @param  {...any} args - slugify args for npm package.
-   * @returns {string}
-   */
   slugify: function (...args) {
     slugifyModule.extend({
       "+": " plus ",
@@ -32,144 +26,101 @@ const WorkspaceThread = {
     return slugifyModule(...args);
   },
 
-  new: async function (workspace, userId = null, data = {}) {
-    try {
-      const thread = await prisma.workspace_threads.create({
-        data: {
-          name: data.name ? String(data.name) : this.defaultName,
-          slug: data.slug
-            ? this.slugify(data.slug, { lowercase: true })
-            : uuidv4(),
-          user_id: userId ? Number(userId) : null,
-          workspace_id: workspace.id,
-        },
-      });
-
-      return { thread, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { thread: null, message: error.message };
-    }
+  new: async function (ctx, data = {}, db = prisma) {
+    const scope = chatScope(ctx);
+    const now = new Date();
+    const thread = await db.chat_threads.create({
+      data: {
+        ...scope,
+        name: data.name ? String(data.name) : this.defaultName,
+        slug: data.slug
+          ? this.slugify(data.slug, { lowercase: true })
+          : uuidv4(),
+        createdAt: now,
+        lastUpdatedAt: now,
+      },
+    });
+    return { thread, message: null };
   },
 
-  update: async function (prevThread = null, data = {}) {
-    if (!prevThread) throw new Error("No thread id provided for update");
-
+  update: async function (ctx, threadId, data = {}, db = prisma) {
+    const scope = chatScope(ctx);
+    if (!Number.isInteger(threadId) || threadId < 1)
+      return { thread: null, message: null };
     const validData = {};
     Object.entries(data).forEach(([key, value]) => {
       if (!this.writable.includes(key)) return;
       validData[key] = value;
     });
-
-    if (Object.keys(validData).length === 0)
-      return { thread: prevThread, message: "No valid fields to update!" };
-
-    try {
-      const thread = await prisma.workspace_threads.update({
-        where: { id: prevThread.id },
-        data: validData,
+    const where = { id: threadId, ...scope };
+    if (Object.keys(validData).length) {
+      await db.chat_threads.updateMany({
+        where,
+        data: { ...validData, lastUpdatedAt: new Date() },
       });
-      return { thread, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { thread: null, message: error.message };
     }
+    return {
+      thread: await db.chat_threads.findFirst({ where }),
+      message: null,
+    };
   },
 
-  get: async function (clause = {}) {
-    try {
-      const thread = await prisma.workspace_threads.findFirst({
-        where: clause,
-      });
-
-      return thread || null;
-    } catch (error) {
-      console.error(error.message);
+  get: async function (ctx, clause = {}, db = prisma) {
+    if (Object.hasOwn(clause, "id") && (!Number.isInteger(clause.id) || clause.id < 1))
       return null;
-    }
+    return db.chat_threads.findFirst({
+      where: { ...clause, ...chatScope(ctx) },
+    });
   },
 
-  delete: async function (clause = {}) {
-    try {
-      const { WorkspaceChats } = require("./workspaceChats");
-      // thread_id has no FK relation so chats don't cascade-delete with the thread.
-      const threads = await prisma.workspace_threads.findMany({
-        where: clause,
-        select: { id: true },
-      });
-      if (threads.length > 0)
-        await WorkspaceChats.delete({
-          thread_id: { in: threads.map((thread) => thread.id) },
-        });
-
-      await prisma.workspace_threads.deleteMany({
-        where: clause,
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
+  // Called in the request transaction, alongside current identity checks.
+  delete: async function (ctx, threadId, db = prisma) {
+    const scope = chatScope(ctx);
+    if (!Number.isInteger(threadId) || threadId < 1) return false;
+    const where = { id: threadId, ...scope };
+    const thread = await db.chat_threads.findFirst({ where });
+    if (!thread) return false;
+    await Chat.delete(ctx, { thread_id: thread.id }, db);
+    const { ParsedFiles } = require("./workspaceParsedFiles");
+    await ParsedFiles.delete(
+      ctx,
+      (await ParsedFiles.where(ctx, thread.id, db)).map((file) => file.id),
+      db
+    );
+    await db.workspace_agent_invocations.deleteMany({
+      where: {
+        thread_id: thread.id,
+        tenantId: ctx.tenantId,
+        user_id: ctx.userId,
+      },
+    });
+    await db.chat_threads.deleteMany({ where });
+    return true;
   },
 
   where: async function (
+    ctx,
     clause = {},
-    limit = null,
-    orderBy = null,
-    include = null
+    { limit = null, orderBy = { lastUpdatedAt: "desc" } } = {},
+    db = prisma
   ) {
-    try {
-      const results = await prisma.workspace_threads.findMany({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : {}),
-        ...(include !== null ? { include } : {}),
-      });
-      return results;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    return db.chat_threads.findMany({
+      where: { ...clause, ...chatScope(ctx) },
+      ...(limit !== null ? { take: limit } : {}),
+      orderBy,
+    });
   },
 
-  migrateToMultiUser: async function (adminUserId) {
-    try {
-      await prisma.workspace_threads.updateMany({
-        where: { user_id: null },
-        data: { user_id: adminUserId },
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-
-  // Will fire on first message (included or not) for a thread and rename the thread based on the prompt.
-  autoRenameThread: async function ({
-    workspace = null,
-    thread = null,
-    user = null,
-    prompt = null,
-    onRename = null,
-  }) {
-    if (!workspace || !thread || !prompt) return false;
-    if (thread.name !== this.defaultName) return false; // don't rename if already named.
-
-    const { WorkspaceChats } = require("./workspaceChats");
-    const chatCount = await WorkspaceChats.count({
-      workspaceId: workspace.id,
-      user_id: user?.id || null,
-      thread_id: thread.id,
+  autoRenameThread: async function (ctx, thread, prompt, db = prisma) {
+    if (!thread || !prompt || thread.name !== this.defaultName) return false;
+    const chatCount = await Chat.count(ctx, { thread_id: thread.id }, db);
+    if (chatCount !== 1) return false;
+    const result = await db.chat_threads.updateMany({
+      where: { id: thread.id, name: this.defaultName, ...chatScope(ctx) },
+      data: { name: truncate(prompt, 22) },
     });
-    if (chatCount !== 1) return { renamed: false, thread };
-    const { thread: updatedThread } = await this.update(thread, {
-      name: truncate(prompt, 22),
-    });
-
-    onRename?.(updatedThread);
-    return true;
+    return result.count === 1;
   },
 };
 
-module.exports = { WorkspaceThread };
+module.exports = { ChatThread };

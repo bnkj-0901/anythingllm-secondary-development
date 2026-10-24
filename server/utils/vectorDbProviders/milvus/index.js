@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const {
   DataType,
   MetricType,
@@ -13,6 +14,11 @@ const { sourceIdentifier } = require("../../chats");
 const { VectorDatabase } = require("../base");
 
 class Milvus extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -31,13 +37,13 @@ class Milvus extends VectorDatabase {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "milvus")
+    if (env.VECTOR_DB !== "milvus")
       throw new Error(`${this.name}::Invalid ENV settings`);
 
     const client = new MilvusClient({
-      address: process.env.MILVUS_ADDRESS,
-      username: process.env.MILVUS_USERNAME,
-      password: process.env.MILVUS_PASSWORD,
+      address: env.MILVUS_ADDRESS,
+      username: env.MILVUS_USERNAME,
+      password: env.MILVUS_PASSWORD,
     });
 
     const { isHealthy } = await client.checkHealth();

@@ -1,14 +1,50 @@
 const { SystemSettings } = require("../models/systemSettings");
-const {
-  flexUserRoleValid,
-  ROLES,
-} = require("../utils/middleware/multiUserProtected");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
 const {
   validExportTypes,
   sendChatHistoryFile,
 } = require("../utils/chats/exportChatToFile");
-const { multiUserMode, reqBody, userFromSession } = require("../utils/http");
+const { safeJsonParse } = require("../utils/http");
+const { ChatThread } = require("../models/workspaceThread");
+const { Chat } = require("../models/workspaceChats");
+
+function registerChatExport(app, { authenticate = validatedRequest } = {}) {
+  app.post(
+    "/conversations/:id/export/:type",
+    authenticate,
+    async (request, response, next) => {
+      try {
+        const { type, id } = request.params;
+        if (!validExportTypes.includes(type))
+          return response.status(400).json({ error: "不支持的导出格式" });
+        const conversation = await ChatThread.get(request.ep, { id: Number(id) });
+        if (!conversation)
+          return response.status(404).json({ error: "对话不存在或无权访问" });
+        const chats = (
+          await Chat.forThread(request.ep, conversation.id, { include: true })
+        ).filter((chat) => {
+          const data = safeJsonParse(chat.response, {});
+          return (
+            typeof chat.prompt === "string" &&
+            chat.prompt.trim() &&
+            typeof data?.text === "string" &&
+            data.text.trim()
+          );
+        });
+        if (!chats.length)
+          return response.status(400).json({ error: "对话尚无可导出的消息" });
+        return await sendChatHistoryFile(
+          response,
+          chats,
+          { conversationName: conversation.name },
+          type
+        );
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+}
 
 function utilEndpoints(app) {
   if (!app) return;
@@ -32,56 +68,7 @@ function utilEndpoints(app) {
     }
   });
 
-  app.post(
-    "/export-chat/:type",
-    [validatedRequest, flexUserRoleValid([ROLES.all])],
-    async (request, response) => {
-      try {
-        const { type } = request.params;
-        if (!validExportTypes.includes(type))
-          return response.sendStatus(400).end();
-
-        const { workspaceSlug, threadSlug } = reqBody(request);
-        const { Workspace } = require("../models/workspace");
-        const { WorkspaceThread } = require("../models/workspaceThread");
-        const { WorkspaceChats } = require("../models/workspaceChats");
-
-        const user = await userFromSession(request, response);
-        const workspace = multiUserMode(response)
-          ? await Workspace.getWithUser(user, { slug: String(workspaceSlug) })
-          : await Workspace.get({ slug: String(workspaceSlug) });
-        if (!workspace) return response.sendStatus(404).end();
-
-        let thread;
-        if (threadSlug) {
-          thread = await WorkspaceThread.get({
-            slug: String(threadSlug),
-            user_id: user?.id || null,
-          });
-          if (!thread) return response.sendStatus(404).end();
-        }
-
-        const chats = await WorkspaceChats.where({
-          workspaceId: workspace.id,
-          user_id: user?.id || null,
-          thread_id: thread?.id || null,
-          api_session_id: null, // Do not include API session chats.
-          include: true, // only export visible chats
-        });
-        if (chats.length === 0) return response.sendStatus(400).end();
-
-        const meta = {
-          workspaceName: workspace.name,
-          threadName: thread?.name || null,
-        };
-
-        return sendChatHistoryFile(response, chats, meta, type);
-      } catch (e) {
-        console.error(e);
-        response.sendStatus(500).end();
-      }
-    }
-  );
+  registerChatExport(app);
 
   const { lemonadeUtilsEndpoints } = require("./utils/lemonadeUtilsEndpoints");
   lemonadeUtilsEndpoints(app);
@@ -286,6 +273,7 @@ function getAnythingLLMUserAgent() {
 
 module.exports = {
   utilEndpoints,
+  registerChatExport,
   getGitVersion,
   getModelTag,
   getAnythingLLMUserAgent,

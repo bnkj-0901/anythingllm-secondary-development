@@ -2,54 +2,12 @@ generator client {
   provider = "prisma-client-js"
 }
 
-// Uncomment the following lines and comment out the SQLite datasource block above to use PostgreSQL
-// Make sure to set the correct DATABASE_URL in your .env file
-// After swapping run `yarn prisma:setup` from the root directory to migrate the database
-//
-// datasource db {
-//   provider = "postgresql"
-//   url      = env("DATABASE_URL")
-// }
 datasource db {
-  provider = "sqlite"
-  url      = "file:../storage/anythingllm.db"
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
 }
 
-model api_keys {
-  id            Int      @id @default(autoincrement())
-  name          String?
-  secret        String?  @unique
-  createdBy     Int?
-  createdAt     DateTime @default(now())
-  lastUpdatedAt DateTime @default(now())
-}
-
-model workspace_documents {
-  id                   Int                   @id @default(autoincrement())
-  docId                String                @unique
-  filename             String
-  docpath              String
-  workspaceId          Int
-  metadata             String?
-  pinned               Boolean?              @default(false)
-  watched              Boolean?              @default(false)
-  createdAt            DateTime              @default(now())
-  lastUpdatedAt        DateTime              @default(now())
-  workspace            workspaces            @relation(fields: [workspaceId], references: [id])
-  document_sync_queues document_sync_queues?
-}
-
-model invites {
-  id            Int      @id @default(autoincrement())
-  code          String   @unique
-  status        String   @default("pending")
-  claimedBy     Int?
-  workspaceIds  String?
-  createdAt     DateTime @default(now())
-  createdBy     Int
-  lastUpdatedAt DateTime @default(now())
-}
-
+// Only the shared settings modules and current SaaS business models are deployed.
 model system_settings {
   id            Int      @id @default(autoincrement())
   label         String   @unique
@@ -58,35 +16,75 @@ model system_settings {
   lastUpdatedAt DateTime @default(now())
 }
 
+model event_logs {
+  id         Int      @id @default(autoincrement())
+  event      String
+  metadata   String?
+  userId     String?
+  occurredAt DateTime @default(now())
+
+  @@index([event])
+  @@index([userId])
+}
+
+model system_prompt_variables {
+  id          Int      @id @default(autoincrement())
+  key         String   @unique
+  value       String?
+  description String?
+  type        String   @default("system") // system, user, dynamic
+  createdAt   DateTime @default(now())
+  updatedAt   DateTime @updatedAt
+}
+
+model ep_tenants {
+  id            String              @id
+  code          String              @unique
+  name          String
+  hostname      String              @unique
+  status        String              @default("active")
+  createdAt     String
+  updatedAt     String
+  users         users[]
+  connections   ep_connections[]
+  libraries     ep_libraries[]
+  libraryGrants ep_library_grants[]
+  documents     documents[]
+  threads       chat_threads[]
+  ragSettings   ep_rag_settings?
+  promptHistory prompt_history[]
+}
+
 model users {
-  id                           Int                           @id @default(autoincrement())
-  username                     String?                       @unique
-  password                     String
+  id                           Int                          @id @default(autoincrement())
+  tenantId                     String
+  username                     String
+  name                         String
+  passwordHash                 String
+  wechatIdentity               String?
+  wechatRegistrationComplete   Boolean                      @default(true)
+  role                         String                       @default("user")
   pfpFilename                  String?
-  role                         String                        @default("default")
-  suspended                    Int                           @default(0)
-  seen_recovery_codes          Boolean?                      @default(false)
-  createdAt                    DateTime                      @default(now())
-  lastUpdatedAt                DateTime                      @default(now())
-  dailyMessageLimit            Int?
-  bio                          String?                       @default("")
+  bio                          String?                      @default("")
+  seen_recovery_codes          Boolean?                     @default(false)
   web_push_subscription_config String?
-  workspace_chats              workspace_chats[]
-  workspace_users              workspace_users[]
-  embed_configs                embed_configs[]
-  embed_chats                  embed_chats[]
-  threads                      workspace_threads[]
+  dailyMessageLimit            Int?
+  status                       String                       @default("active")
+  authVersion                  Int                          @default(1)
+  createdAt                    DateTime                     @default(now())
+  updatedAt                    DateTime                     @default(now()) @map("lastUpdatedAt")
+  tenant                       ep_tenants                   @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  libraryGrants                ep_library_grants[]
+  threads                      chat_threads[]
+  browser_extension_api_keys   browser_extension_api_keys[]
+  desktop_mobile_devices       desktop_mobile_devices[]
+  temporary_auth_tokens        temporary_auth_tokens[]
   recovery_codes               recovery_codes[]
   password_reset_tokens        password_reset_tokens[]
-  workspace_agent_invocations  workspace_agent_invocations[]
-  slash_command_presets        slash_command_presets[]
-  browser_extension_api_keys   browser_extension_api_keys[]
-  temporary_auth_tokens        temporary_auth_tokens[]
-  system_prompt_variables      system_prompt_variables[]
-  prompt_history               prompt_history[]
-  desktop_mobile_devices       desktop_mobile_devices[]
-  workspace_parsed_files       workspace_parsed_files[]
-  memories                     memories[]
+
+  @@unique([tenantId, username])
+  @@unique([tenantId, wechatIdentity])
+  @@unique([tenantId, id])
 }
 
 model recovery_codes {
@@ -110,115 +108,276 @@ model password_reset_tokens {
   @@index([user_id])
 }
 
+model ep_platform_accounts {
+  id           String @id
+  username     String @unique
+  name         String
+  passwordHash String
+  status       String @default("active")
+  authVersion  Int    @default(1)
+  createdAt    String
+  updatedAt    String
+}
+
+model ep_connections {
+  id        String      @id
+  tenantId  String?
+  scope     String
+  kind      String
+  provider  String
+  name      String
+  model     String
+  baseUrl   String      @default("")
+  secret    String?
+  options   String      @default("{}")
+  version   Int         @default(1)
+  available Int         @default(1)
+  isDefault Int         @default(0)
+  createdAt String
+  updatedAt String
+  tenant    ep_tenants? @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model ep_rag_settings {
+  tenantId  String     @id
+  settings  String     @default("{}")
+  updatedAt String
+  tenant    ep_tenants @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+}
+
+model ep_libraries {
+  id        String              @id
+  tenantId  String
+  name      String
+  createdBy String
+  createdAt String
+  updatedAt String
+  tenant    ep_tenants          @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  documents documents[]
+  grants    ep_library_grants[]
+
+  @@unique([tenantId, id])
+  @@index([tenantId], map: "ep_libraries_scope")
+}
+
+// A resource grant targets either all users of a tenant or one individual user.
+// The database CHECK enforces exactly one subject; origin tenant is not access.
+model ep_library_grants {
+  id        String       @id
+  libraryId String
+  tenantId  String?
+  userId    Int?
+  library   ep_libraries @relation(fields: [libraryId], references: [id], onDelete: Cascade, onUpdate: NoAction)
+  tenant    ep_tenants?  @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user      users?       @relation(fields: [userId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@unique([libraryId, tenantId])
+  @@unique([libraryId, userId])
+  @@index([tenantId])
+  @@index([userId])
+}
+
+model documents {
+  id           String                @id
+  tenantId     String
+  libraryId    String
+  title        String
+  inputType    String
+  content      String                @default("")
+  metadata     String?
+  pinned       Boolean               @default(false)
+  originalPath String?
+  status       String
+  error        String?
+  version      Int                   @default(1)
+  embeddingId  String?
+  createdBy    String
+  updatedBy    String
+  createdAt    String
+  updatedAt    String
+  tenant       ep_tenants            @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  library      ep_libraries          @relation(fields: [tenantId, libraryId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  chunks       document_vectors[]
+  syncQueue    document_sync_queues?
+
+  @@unique([tenantId, id])
+  @@index([tenantId, libraryId, status], map: "ep_documents_scope")
+  @@map("ep_documents")
+}
+
 model document_vectors {
-  id            Int      @id @default(autoincrement())
-  docId         String
-  vectorId      String
-  createdAt     DateTime @default(now())
-  lastUpdatedAt DateTime @default(now())
+  id          String    @id
+  tenantId    String
+  documentId  String
+  version     Int
+  position    Int
+  metadata    String?
+  content     String
+  embeddingId String
+  dimensions  Int
+  namespace   String
+  document    documents @relation(fields: [tenantId, documentId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tenantId, documentId, version, embeddingId], map: "ep_chunks_document")
+  @@map("ep_chunks")
 }
 
-model workspaces {
-  id                           Int                            @id @default(autoincrement())
-  name                         String
-  slug                         String                         @unique
-  vectorTag                    String?
-  createdAt                    DateTime                       @default(now())
-  openAiTemp                   Float?
-  openAiHistory                Int                            @default(20)
-  lastUpdatedAt                DateTime                       @default(now())
-  // THIS IS THE SYSTEM PROMPT FOR THE WORKSPACE
-  openAiPrompt                 String?
-  similarityThreshold          Float?                         @default(0.25)
-  chatProvider                 String?
-  chatModel                    String?
-  topN                         Int?                           @default(4)
-  chatMode                     String?                        @default("chat")
-  pfpFilename                  String?
-  agentProvider                String?
-  agentModel                   String?
-  queryRefusalResponse         String?
-  vectorSearchMode             String?                        @default("default")
-  router_id                    Int? // No relation to prevent whole table migration (SQLite limitation)
-  workspace_users              workspace_users[]
-  documents                    workspace_documents[]
-  workspace_suggested_messages workspace_suggested_messages[]
-  embed_configs                embed_configs[]
-  threads                      workspace_threads[]
-  workspace_agent_invocations  workspace_agent_invocations[]
-  prompt_history               prompt_history[]
-  workspace_parsed_files       workspace_parsed_files[]
-  memories                     memories[]
+model ep_vector_settings {
+  id        String  @id
+  provider  String  @default("lancedb")
+  config    String?
+  revision  Int     @default(1)
+  updatedAt String
 }
 
-model workspace_threads {
-  id                     Int                      @id @default(autoincrement())
-  name                   String
-  slug                   String                   @unique
-  workspace_id           Int
-  user_id                Int?
-  createdAt              DateTime                 @default(now())
-  lastUpdatedAt          DateTime                 @default(now())
-  workspace              workspaces               @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
-  user                   users?                   @relation(fields: [user_id], references: [id], onDelete: Cascade)
-  workspace_parsed_files workspace_parsed_files[]
-
-  @@index([workspace_id])
-  @@index([user_id])
+model ep_vector_cleanup {
+  id        String @id
+  tenantId  String
+  namespace String
+  createdAt String
 }
 
-model workspace_suggested_messages {
+model ep_file_cleanup {
+  path      String @id
+  tenantId  String
+  createdAt String
+}
+
+model chat_threads {
   id            Int        @id @default(autoincrement())
-  workspaceId   Int
-  heading       String
-  message       String
+  tenantId      String
+  userId        Int
+  name          String
+  slug          String     @unique
   createdAt     DateTime   @default(now())
   lastUpdatedAt DateTime   @default(now())
-  workspace     workspaces @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
+  tenant        ep_tenants @relation(fields: [tenantId], references: [id], onDelete: NoAction, onUpdate: NoAction)
+  user          users      @relation(fields: [tenantId, userId], references: [tenantId, id], onDelete: NoAction, onUpdate: NoAction)
+  chats         chats[]
 
-  @@index([workspaceId])
+  @@unique([tenantId, userId, id])
+  @@index([tenantId, userId, lastUpdatedAt])
 }
 
-model workspace_chats {
-  id             Int      @id @default(autoincrement())
-  workspaceId    Int
-  prompt         String
-  response       String
-  include        Boolean  @default(true)
-  user_id        Int?
-  thread_id      Int? // No relation to prevent whole table migration
-  api_session_id String? // String identifier for only the dev API to partition chats in any mode.
-  createdAt      DateTime @default(now())
-  lastUpdatedAt  DateTime @default(now())
+model chats {
+  id Int @id @default(autoincrement())
+
+  tenantId        String
+  userId          Int
+  thread_id       Int
+  prompt          String
+  response        String
+  include         Boolean      @default(true)
+  api_session_id  String?
   feedbackScore   Boolean?
-  memoryProcessed Boolean? @map("memory_processed")
-  users           users?   @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  memoryProcessed Boolean?     @map("memory_processed")
+  createdAt       DateTime     @default(now())
+  lastUpdatedAt   DateTime     @default(now())
+  thread          chat_threads @relation(fields: [tenantId, userId, thread_id], references: [tenantId, userId, id], onDelete: NoAction, onUpdate: NoAction)
+
+  @@index([tenantId, userId, thread_id, id])
+}
+
+model ep_knowledge_changes {
+  id            String  @id
+  tenantId      String
+  libraryId     String?
+  documentId    String?
+  action        String
+  payload       String  @default("{}")
+  baseVersion   Int?
+  baseUpdatedAt String?
+  status        String  @default("pending")
+  requestedBy   String
+  reviewedBy    String?
+  reviewNote    String?
+  createdAt     String
+  updatedAt     String
+  reviewedAt    String?
+
+  @@index([tenantId, status, createdAt])
+  @@index([requestedBy, createdAt])
+}
+
+model memories {
+  id         Int       @id @default(autoincrement())
+  tenantId   String
+  userId     Int       @map("user_id")
+  content    String
+  lastUsedAt DateTime? @map("last_used_at")
+  createdAt  DateTime  @default(now()) @map("created_at")
+  updatedAt  DateTime  @default(now()) @map("updated_at")
+
+  @@index([tenantId, userId])
 }
 
 model workspace_agent_invocations {
-  id            Int        @id @default(autoincrement())
-  uuid          String     @unique
-  prompt        String // Contains agent invocation to parse + option additional text for seed.
-  closed        Boolean    @default(false)
-  user_id       Int?
-  thread_id     Int? // No relation to prevent whole table migration
-  workspace_id  Int
-  createdAt     DateTime   @default(now())
-  lastUpdatedAt DateTime   @default(now())
-  user          users?     @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  workspace     workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+  id            Int      @id @default(autoincrement())
+  uuid          String   @unique
+  prompt        String
+  closed        Boolean  @default(false)
+  tenantId      String
+  user_id       Int
+  thread_id     Int
+  createdAt     DateTime @default(now())
+  lastUpdatedAt DateTime @default(now())
 
-  @@index([uuid])
+  @@index([tenantId, user_id, thread_id])
 }
 
-model workspace_users {
-  id            Int        @id @default(autoincrement())
-  user_id       Int
-  workspace_id  Int
-  createdAt     DateTime   @default(now())
-  lastUpdatedAt DateTime   @default(now())
-  workspaces    workspaces @relation(fields: [workspace_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
-  users         users      @relation(fields: [user_id], references: [id], onDelete: Cascade, onUpdate: Cascade)
+model slash_command_presets {
+  id            Int      @id @default(autoincrement())
+  command       String
+  prompt        String
+  description   String
+  tenantId      String
+  userId        Int
+  createdAt     DateTime @default(now())
+  lastUpdatedAt DateTime @default(now())
+
+  @@unique([tenantId, userId, command])
+}
+
+model model_routers {
+  id                Int                  @id @default(autoincrement())
+  name              String               @unique
+  description       String?
+  fallback_provider String
+  fallback_model    String
+  cooldown_seconds  Int                  @default(30)
+  created_by        String?
+  createdAt         DateTime             @default(now())
+  lastUpdatedAt     DateTime             @default(now())
+  rules             model_router_rules[]
+}
+
+model model_router_rules {
+  id              Int           @id @default(autoincrement())
+  router_id       Int
+  enabled         Boolean       @default(true)
+  priority        Int
+  type            String        @default("calculated")
+  title           String
+  description     String?
+  // For `calculated` rules: the boolean operator joining `conditions` — "AND"
+  // (all must match) or "OR" (any must match). Null for `llm` rules.
+  condition_logic String?
+  // For `calculated` rules: JSON-stringified array of condition objects, each
+  // shaped as { property: string, comparator: string, value: string } where
+  // `property` ∈ VALID_PROPERTIES and `comparator` ∈ VALID_COMPARATORS (see
+  // server/models/modelRouterRule.js). `value` is always stored as a string;
+  // numeric comparators parse it at evaluation time. Null for `llm` rules.
+  conditions      String?
+  route_provider  String
+  route_model     String
+  created_by      String?
+  createdAt       DateTime      @default(now())
+  lastUpdatedAt   DateTime      @default(now())
+  router          model_routers @relation(fields: [router_id], references: [id], onDelete: Cascade)
+
+  @@unique([router_id, title])
+  @@index([router_id])
+  @@index([router_id, enabled, priority])
 }
 
 model cache_data {
@@ -230,6 +389,43 @@ model cache_data {
   expiresAt     DateTime?
   createdAt     DateTime  @default(now())
   lastUpdatedAt DateTime  @default(now())
+}
+
+model api_keys {
+  id            Int      @id @default(autoincrement())
+  tenantId      String
+  userId        Int
+  name          String?
+  secret        String?  @unique
+  createdBy     String?
+  createdAt     DateTime @default(now())
+  lastUpdatedAt DateTime @default(now())
+}
+
+model browser_extension_api_keys {
+  id            Int      @id @default(autoincrement())
+  key           String   @unique
+  tenantId      String
+  user_id       Int
+  createdAt     DateTime @default(now())
+  lastUpdatedAt DateTime @updatedAt
+  user          users    @relation(fields: [user_id], references: [id], onDelete: Cascade)
+
+  @@index([user_id])
+}
+
+model desktop_mobile_devices {
+  id         Int      @id @default(autoincrement())
+  deviceOs   String
+  deviceName String
+  token      String   @unique
+  approved   Boolean  @default(false)
+  tenantId   String
+  userId     Int
+  createdAt  DateTime @default(now())
+  user       users    @relation(fields: [userId], references: [id], onDelete: Cascade)
+
+  @@index([userId])
 }
 
 model embed_configs {
@@ -244,13 +440,11 @@ model embed_configs {
   max_chats_per_day          Int?
   max_chats_per_session      Int?
   message_limit              Int?          @default(20)
-  workspace_id               Int
-  createdBy                  Int?
-  usersId                    Int?
+  tenantId                   String
+  libraryId                  String
+  createdBy                  String?
   createdAt                  DateTime      @default(now())
-  workspace                  workspaces    @relation(fields: [workspace_id], references: [id], onDelete: Cascade)
   embed_chats                embed_chats[]
-  users                      users?        @relation(fields: [usersId], references: [id])
 }
 
 model embed_chats {
@@ -261,147 +455,27 @@ model embed_chats {
   include                Boolean       @default(true)
   connection_information String?
   embed_id               Int
-  usersId                Int?
   createdAt              DateTime      @default(now())
   embed_config           embed_configs @relation(fields: [embed_id], references: [id], onDelete: Cascade)
-  users                  users?        @relation(fields: [usersId], references: [id])
-}
-
-model event_logs {
-  id         Int      @id @default(autoincrement())
-  event      String
-  metadata   String?
-  userId     Int?
-  occurredAt DateTime @default(now())
-
-  @@index([event])
-}
-
-model slash_command_presets {
-  id            Int      @id @default(autoincrement())
-  command       String
-  prompt        String
-  description   String
-  uid           Int      @default(0) // 0 is null user
-  userId        Int?
-  createdAt     DateTime @default(now())
-  lastUpdatedAt DateTime @default(now())
-  user          users?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@unique([uid, command])
-}
-
-model document_sync_queues {
-  id             Int                        @id @default(autoincrement())
-  staleAfterMs   Int                        @default(604800000) // 7 days
-  nextSyncAt     DateTime
-  createdAt      DateTime                   @default(now())
-  lastSyncedAt   DateTime                   @default(now())
-  workspaceDocId Int                        @unique
-  workspaceDoc   workspace_documents?       @relation(fields: [workspaceDocId], references: [id], onDelete: Cascade)
-  runs           document_sync_executions[]
-}
-
-model document_sync_executions {
-  id        Int                  @id @default(autoincrement())
-  queueId   Int
-  status    String               @default("unknown")
-  result    String?
-  createdAt DateTime             @default(now())
-  queue     document_sync_queues @relation(fields: [queueId], references: [id], onDelete: Cascade)
-}
-
-model browser_extension_api_keys {
-  id            Int      @id @default(autoincrement())
-  key           String   @unique
-  user_id       Int?
-  createdAt     DateTime @default(now())
-  lastUpdatedAt DateTime @updatedAt
-  user          users?   @relation(fields: [user_id], references: [id], onDelete: Cascade)
-
-  @@index([user_id])
-}
-
-model temporary_auth_tokens {
-  id        Int      @id @default(autoincrement())
-  token     String   @unique
-  userId    Int
-  expiresAt DateTime
-  createdAt DateTime @default(now())
-  user      users    @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([token])
-  @@index([userId])
-}
-
-model system_prompt_variables {
-  id          Int      @id @default(autoincrement())
-  key         String   @unique
-  value       String?
-  description String?
-  type        String   @default("system") // system, user, dynamic
-  userId      Int?
-  createdAt   DateTime @default(now())
-  updatedAt   DateTime @updatedAt
-  user        users?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model prompt_history {
-  id          Int        @id @default(autoincrement())
-  workspace   workspaces @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  workspaceId Int
-  prompt      String
-  modifiedBy  Int?
-  modifiedAt  DateTime   @default(now())
-  user        users?     @relation(fields: [modifiedBy], references: [id])
-
-  @@index([workspaceId])
-}
-
-// Schema specific to mobile app <> Desktop app connection
-model desktop_mobile_devices {
-  id         Int      @id @default(autoincrement())
-  deviceOs   String
-  deviceName String
-  token      String   @unique
-  approved   Boolean  @default(false)
-  userId     Int?
-  createdAt  DateTime @default(now())
-  user       users?   @relation(fields: [userId], references: [id], onDelete: Cascade)
-
-  @@index([userId])
-}
-
-model workspace_parsed_files {
-  id                 Int                @id @default(autoincrement())
-  filename           String             @unique
-  workspaceId        Int
-  userId             Int?
-  threadId           Int?
-  metadata           String?
-  tokenCountEstimate Int?               @default(0)
-  createdAt          DateTime           @default(now())
-  workspace          workspaces         @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-  user               users?             @relation(fields: [userId], references: [id], onDelete: Cascade)
-  thread             workspace_threads? @relation(fields: [threadId], references: [id], onDelete: Cascade)
-
-  @@index([workspaceId])
-  @@index([userId])
 }
 
 model external_communication_connectors {
   id            Int      @id @default(autoincrement())
-  type          String   @unique
+  tenantId      String
+  botId         String?  @unique
+  type          String
   config        String   @default("{}")
   active        Boolean  @default(false)
   createdAt     DateTime @default(now())
   lastUpdatedAt DateTime @default(now())
+
+  @@unique([tenantId, type])
 }
 
 model scheduled_jobs {
   id        Int                  @id @default(autoincrement())
+  tenantId  String
+  userId    Int
   name      String
   prompt    String
   tools     String? // JSON array of tool identifiers (null = use all enabled agent skills)
@@ -428,61 +502,76 @@ model scheduled_job_runs {
   @@index([jobId])
 }
 
-model memories {
-  id          Int       @id @default(autoincrement())
-  userId      Int?      @map("user_id")
-  workspaceId Int?      @map("workspace_id")
-  scope       String    @default("workspace")
-  content     String
-  lastUsedAt  DateTime? @map("last_used_at")
-  createdAt   DateTime  @default(now()) @map("created_at")
-  updatedAt   DateTime  @default(now()) @map("updated_at")
+model temporary_auth_tokens {
+  id          Int      @id @default(autoincrement())
+  token       String   @unique
+  tenantId    String
+  userId      Int
+  authVersion Int      @default(1)
+  expiresAt   DateTime
+  createdAt   DateTime @default(now())
+  user        users    @relation(fields: [userId], references: [id], onDelete: Cascade)
 
-  user      users?      @relation(fields: [userId], references: [id], onDelete: Cascade)
-  workspace workspaces? @relation(fields: [workspaceId], references: [id], onDelete: Cascade)
-
-  @@index([userId, workspaceId])
-  @@index([userId, scope])
+  @@index([token])
+  @@index([userId])
 }
 
-model model_routers {
-  id                Int                  @id @default(autoincrement())
-  name              String               @unique
-  description       String?
-  fallback_provider String
-  fallback_model    String
-  cooldown_seconds  Int                  @default(30)
-  created_by        Int?
-  createdAt         DateTime             @default(now())
-  lastUpdatedAt     DateTime             @default(now())
-  rules             model_router_rules[]
+model workspace_parsed_files {
+  id                 Int      @id @default(autoincrement())
+  tenantId           String
+  userId             Int
+  threadId           Int
+  filename           String
+  metadata           String?
+  tokenCountEstimate Int      @default(0)
+  createdAt          DateTime @default(now())
+  lastUpdatedAt      DateTime @default(now())
+
+  @@index([tenantId, userId, threadId])
 }
 
-model model_router_rules {
-  id               Int           @id @default(autoincrement())
-  router_id        Int
-  enabled          Boolean       @default(true)
-  priority         Int
-  type             String        @default("calculated")
-  title            String
-  description      String?
-  // For `calculated` rules: the boolean operator joining `conditions` — "AND"
-  // (all must match) or "OR" (any must match). Null for `llm` rules.
-  condition_logic  String?
-  // For `calculated` rules: JSON-stringified array of condition objects, each
-  // shaped as { property: string, comparator: string, value: string } where
-  // `property` ∈ VALID_PROPERTIES and `comparator` ∈ VALID_COMPARATORS (see
-  // server/models/modelRouterRule.js). `value` is always stored as a string;
-  // numeric comparators parse it at evaluation time. Null for `llm` rules.
-  conditions       String?
-  route_provider   String
-  route_model      String
-  created_by       Int?
-  createdAt        DateTime      @default(now())
-  lastUpdatedAt    DateTime      @default(now())
-  router           model_routers @relation(fields: [router_id], references: [id], onDelete: Cascade)
+model document_sync_queues {
+  id             Int                        @id @default(autoincrement())
+  documentId     String                     @unique
+  tenantId       String
+  userId         Int
+  staleAfterMs   Int                        @default(604800000)
+  nextSyncAt     DateTime
+  lastSyncedAt   DateTime?
+  failedAttempts Int                        @default(0)
+  createdAt      DateTime                   @default(now())
+  updatedAt      DateTime                   @default(now())
+  document       documents                  @relation(fields: [documentId], references: [id], onDelete: Cascade)
+  runs           document_sync_executions[]
+}
 
-  @@unique([router_id, title])
-  @@index([router_id])
-  @@index([router_id, enabled, priority])
+model document_sync_executions {
+  id        Int                  @id @default(autoincrement())
+  queueId   Int
+  status    String               @default("unknown")
+  result    String?
+  createdAt DateTime             @default(now())
+  queue     document_sync_queues @relation(fields: [queueId], references: [id], onDelete: Cascade)
+}
+
+model prompt_history {
+  id         Int        @id @default(autoincrement())
+  tenantId   String
+  prompt     String
+  modifiedBy String?
+  modifiedAt DateTime   @default(now())
+  tenant     ep_tenants @relation(fields: [tenantId], references: [id], onDelete: Cascade)
+
+  @@index([tenantId])
+}
+
+model suggested_messages {
+  id            Int      @id @default(autoincrement())
+  tenantId      String
+  heading       String
+  message       String
+  createdAt     DateTime @default(now())
+  lastUpdatedAt DateTime @default(now())
+
+  @@index([tenantId])
 }

@@ -3,20 +3,43 @@ const { VALID_CHAT_MODE } = require("../chats/stream");
 const { EmbedChats } = require("../../models/embedChats");
 const { EmbedConfig } = require("../../models/embedConfig");
 const { reqBody } = require("../http");
+const { resolveSite } = require("../../enterprise/domains");
+const prisma = require("../prisma");
 
 // Finds or Aborts request for a /:embedId/ url. This should always
 // be the first middleware and the :embedID should be in the URL.
 async function validEmbedConfig(request, response, next) {
-  const { embedId } = request.params;
+  try {
+    const { embedId } = request.params;
 
-  const embed = await EmbedConfig.getWithWorkspace({ uuid: String(embedId) });
-  if (!embed) {
-    response.sendStatus(404).end();
-    return;
+    const embed = await EmbedConfig.getWithLibrary({ uuid: String(embedId) });
+    const site = await resolveSite(request);
+    if (
+      !embed ||
+      site.kind !== "tenant" ||
+      site.tenant.id !== embed.tenantId ||
+      !(await prisma.ep_library_grants.findFirst({
+        where: { libraryId: embed.libraryId, tenantId: embed.tenantId },
+      }))
+    ) {
+      response.status(404).json({ error: "Publication not found" });
+      return;
+    }
+
+    const allowed = EmbedConfig.parseAllowedHosts(embed);
+    if (
+      !embed.enabled ||
+      (allowed === null && "EMBED_REQUIRE_ALLOWLIST" in process.env) ||
+      (allowed !== null && !allowed.includes(request.headers.origin || ""))
+    ) {
+      response.status(403).json({ error: "Invalid publication request" });
+      return;
+    }
+    response.locals.embedConfig = embed;
+    next();
+  } catch (error) {
+    next(error);
   }
-
-  response.locals.embedConfig = embed;
-  next();
 }
 
 function setConnectionMeta(request, response, next) {
@@ -28,16 +51,25 @@ function setConnectionMeta(request, response, next) {
 }
 
 async function validEmbedConfigId(request, response, next) {
-  const { embedId } = request.params;
+  try {
+    const { embedId } = request.params;
 
-  const embed = await EmbedConfig.get({ id: Number(embedId) });
-  if (!embed) {
-    response.sendStatus(404).end();
-    return;
+    const embed = await EmbedConfig.get({
+      id: Number(embedId),
+      ...(request.ep.identity === "platform"
+        ? {}
+        : { tenantId: request.ep.tenantId }),
+    });
+    if (!embed) {
+      response.status(404).json({ error: "Publication not found" });
+      return;
+    }
+
+    response.locals.embedConfig = embed;
+    next();
+  } catch (error) {
+    next(error);
   }
-
-  response.locals.embedConfig = embed;
-  next();
 }
 
 async function canRespond(request, response, next) {

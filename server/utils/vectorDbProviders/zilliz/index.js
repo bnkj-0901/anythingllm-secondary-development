@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { MilvusClient } = require("@zilliz/milvus2-sdk-node");
 const { Milvus } = require("../milvus");
 
@@ -15,12 +16,12 @@ class Zilliz extends Milvus {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "zilliz")
+    if (env.VECTOR_DB !== "zilliz")
       throw new Error(`${this.name}::Invalid ENV settings`);
 
     const client = new MilvusClient({
-      address: process.env.ZILLIZ_ENDPOINT,
-      token: process.env.ZILLIZ_API_TOKEN,
+      address: env.ZILLIZ_ENDPOINT,
+      token: env.ZILLIZ_API_TOKEN,
     });
 
     const { isHealthy } = await client.checkHealth();

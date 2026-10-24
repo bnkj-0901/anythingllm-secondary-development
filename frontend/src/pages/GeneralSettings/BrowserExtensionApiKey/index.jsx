@@ -1,3 +1,4 @@
+import useUser from "@/hooks/useUser";
 import { useEffect, useState } from "react";
 import Sidebar from "@/components/SettingsSidebar";
 import { isMobile } from "react-device-detect";
@@ -14,6 +15,8 @@ import { fullApiUrl } from "@/utils/constants";
 import { Tooltip } from "react-tooltip";
 
 export default function BrowserExtensionApiKeys() {
+  const { user } = useUser();
+  const canCreate = user?.identity === "platform" || user?.role === "admin";
   const [loading, setLoading] = useState(true);
   const [apiKeys, setApiKeys] = useState([]);
   const [error, setError] = useState(null);
@@ -58,15 +61,17 @@ export default function BrowserExtensionApiKeys() {
               AnythingLLM instance.
             </p>
           </div>
-          <div className="w-full justify-end flex">
-            <CTAButton
-              onClick={openModal}
-              className="mt-3 mr-0 mb-4 md:-mb-14 z-10"
-            >
-              <PlusCircle className="h-4 w-4" weight="bold" />
-              Generate New API Key
-            </CTAButton>
-          </div>
+          {canCreate && (
+            <div className="w-full justify-end flex">
+              <CTAButton
+                onClick={openModal}
+                className="mt-3 mr-0 mb-4 md:-mb-14 z-10"
+              >
+                <PlusCircle className="h-4 w-4" weight="bold" />
+                Generate New API Key
+              </CTAButton>
+            </div>
+          )}
           <div className="overflow-x-auto mt-6">
             {loading ? (
               <Skeleton.default
@@ -116,7 +121,7 @@ export default function BrowserExtensionApiKeys() {
                         key={apiKey.id}
                         apiKey={apiKey}
                         removeApiKey={removeApiKey}
-                        connectionString={`${fullApiUrl()}|${apiKey.key}`}
+                        connectionString={`${apiKey.apiOrigin ? `${apiKey.apiOrigin}/api` : fullApiUrl()}|${apiKey.key}`}
                         isMultiUser={isMultiUser}
                       />
                     ))
@@ -127,7 +132,7 @@ export default function BrowserExtensionApiKeys() {
           </div>
         </div>
       </div>
-      <Modal isOpen={isOpen} onClose={closeModal}>
+      <Modal isOpen={canCreate && isOpen} onClose={closeModal}>
         <NewBrowserExtensionApiKeyModal
           closeModal={closeModal}
           onSuccess={fetchExistingKeys}

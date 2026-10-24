@@ -5,14 +5,15 @@ import { useParams } from "react-router-dom";
 
 const SEEN_COPY_LINK_CHAT_ALERT = "anythingllm_seen_copy_link_chat_alert";
 
-export default function CopyLinkToChatRow() {
+export default function CopyLinkToChatRow({ chatUrl = null }) {
   const { slug, threadSlug } = useParams();
   const [copied, setCopied] = useState(false);
   const { isOpen, openModal, closeModal } = useModal();
 
-  if (!slug) return null;
+  if (!chatUrl && !slug) return null;
 
   function getChatUrl() {
+    if (chatUrl) return chatUrl;
     let path = `/workspace/${slug}`;
     if (threadSlug) path += `/t/${threadSlug}`;
     return `${window.location.origin}${path}`;

@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from "react";
-import Workspace from "@/models/workspace";
+import { api, savedSession } from "@/models/platform";
+import { TenantSelection } from "@/components/lib/ExecutionIdentity";
 import { TagsInput } from "react-tag-input-component";
 import Embed from "@/models/embed";
 import Toggle from "@/components/lib/Toggle";
@@ -49,11 +50,11 @@ export default function NewEmbedModal({ closeModal }) {
   return (
     <form onSubmit={handleCreate} className="flex flex-col gap-y-5">
       <ModalHeader
-        title="Create new embed for workspace"
+        title="Create new embed for knowledge library"
         onClose={closeModal}
       />
       <ModalBody>
-        <WorkspaceSelection />
+        <LibrarySelection />
         <ChatModeSelection />
         <PermittedDomains />
         <NumberInput
@@ -75,17 +76,17 @@ export default function NewEmbedModal({ closeModal }) {
         <BooleanInput
           name="allow_model_override"
           title="Enable dynamic model use"
-          hint="Allow setting of the preferred LLM model to override the workspace default."
+          hint="Allow setting of the preferred LLM model to override the enterprise default."
         />
         <BooleanInput
           name="allow_temperature_override"
           title="Enable dynamic LLM temperature"
-          hint="Allow setting of the LLM temperature to override the workspace default."
+          hint="Allow setting of the LLM temperature to override the enterprise default."
         />
         <BooleanInput
           name="allow_prompt_override"
           title="Enable Prompt Override"
-          hint="Allow setting of the system prompt to override the workspace default."
+          hint="Allow setting of the system prompt to override the enterprise default."
         />
 
         {error && <p className="text-red-400 text-sm">Error: {error}</p>}
@@ -108,43 +109,62 @@ export default function NewEmbedModal({ closeModal }) {
   );
 }
 
-export const WorkspaceSelection = ({ defaultValue = null }) => {
-  const [workspaces, setWorkspaces] = useState([]);
+export const LibrarySelection = ({
+  defaultValue = "",
+  defaultTenantId = "",
+}) => {
+  const session = savedSession();
+  const platform = session?.identity === "platform";
+  const [tenantId, setTenantId] = useState(
+    defaultTenantId || session?.tenant?.id || ""
+  );
+  const [libraries, setLibraries] = useState([]);
+  const [libraryId, setLibraryId] = useState(defaultValue);
+  const [error, setError] = useState(null);
   useEffect(() => {
-    async function fetchWorkspaces() {
-      const _workspaces = await Workspace.all();
-      setWorkspaces(_workspaces);
-    }
-    fetchWorkspaces();
-  }, []);
-
+    setLibraries([]);
+    if (platform && !tenantId) return;
+    api(
+      platform
+        ? `/platform/libraries?tenantId=${encodeURIComponent(tenantId)}`
+        : "/libraries"
+    )
+      .then((result) =>
+        setLibraries(
+          (result.libraries || []).filter(
+            (library) => library.visibility === "public"
+          )
+        )
+      )
+      .catch((error) => setError(error.message));
+  }, [tenantId, platform]);
   return (
-    <div>
-      <div className="flex flex-col mb-2">
-        <ModalLabel htmlFor="workspace_id">Workspace</ModalLabel>
-        <ModalHint>
-          This is the workspace your chat window will be based on. All defaults
-          will be inherited from the workspace unless overridden by this config.
-        </ModalHint>
-      </div>
+    <div className="flex flex-col gap-y-2">
+      <TenantSelection
+        value={tenantId}
+        onChange={(id) => {
+          setTenantId(id);
+          setLibraryId("");
+        }}
+      />
+      <ModalLabel htmlFor="libraryId">公有知识库</ModalLabel>
+      <ModalHint>此配置将选中公有库的已批准内容对外发布给匿名访客。</ModalHint>
       <select
-        name="workspace_id"
-        required={true}
-        defaultValue={defaultValue}
-        className="min-w-[15rem] rounded-lg bg-zinc-800 light:bg-white border border-zinc-800 light:border-slate-300 px-4 py-2 text-sm text-zinc-100 light:text-slate-900 focus:ring-blue-500 focus:border-blue-500"
+        id="libraryId"
+        name="libraryId"
+        required
+        value={libraryId}
+        onChange={(event) => setLibraryId(event.target.value)}
+        className="min-w-[15rem] rounded-lg bg-zinc-800 light:bg-white border border-zinc-800 light:border-slate-300 px-4 py-2 text-sm text-zinc-100 light:text-slate-900"
       >
-        {workspaces.map((workspace) => {
-          return (
-            <option
-              key={workspace.id}
-              selected={defaultValue === workspace.id}
-              value={workspace.id}
-            >
-              {workspace.name}
-            </option>
-          );
-        })}
+        <option value="">请选择知识库</option>
+        {libraries.map((library) => (
+          <option key={library.id} value={library.id}>
+            {library.name}
+          </option>
+        ))}
       </select>
+      {error && <p className="text-red-400 text-sm">{error}</p>}
     </div>
   );
 };
@@ -161,7 +181,7 @@ export const ChatModeSelection = ({ defaultValue = null }) => {
           if a document helps answer the query.
           <br />
           Chat opens the chat to even general questions and can answer totally
-          unrelated queries to your workspace.
+          unrelated queries to your knowledge library.
         </ModalHint>
       </div>
       <div className="mt-2 gap-y-3 flex flex-col">
@@ -210,7 +230,8 @@ export const ChatModeSelection = ({ defaultValue = null }) => {
             }`}
           ></div>
           <div className="text-zinc-100 light:text-slate-900 text-sm font-medium font-['Plus Jakarta Sans'] leading-tight">
-            Query: Only respond to chats related to documents in workspace
+            Query: Only respond to chats related to documents in the published
+            knowledge library
           </div>
         </label>
       </div>

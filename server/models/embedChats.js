@@ -152,7 +152,7 @@ const EmbedChats = {
     }
   },
 
-  whereWithEmbedAndWorkspace: async function (
+  whereWithEmbedAndLibrary: async function (
     clause = {},
     limit = null,
     orderBy = null,
@@ -163,20 +163,25 @@ const EmbedChats = {
         where: clause,
         include: {
           embed_config: {
-            select: {
-              workspace: {
-                select: {
-                  name: true,
-                },
-              },
-            },
+            select: { tenantId: true, libraryId: true, uuid: true },
           },
         },
         ...(limit !== null ? { take: limit } : {}),
         ...(offset !== null ? { skip: offset } : {}),
         ...(orderBy !== null ? { orderBy } : {}),
       });
-      return chats;
+      return Promise.all(
+        chats.map(async (chat) => ({
+          ...chat,
+          embed_config: {
+            ...chat.embed_config,
+            library: (await prisma.ep_libraries.findUnique({
+              where: { id: chat.embed_config.libraryId },
+              select: { id: true, name: true },
+            })) || { name: "已删除知识库" },
+          },
+        }))
+      );
     } catch (error) {
       console.error(error.message);
       return [];

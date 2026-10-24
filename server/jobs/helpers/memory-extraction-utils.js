@@ -1,4 +1,4 @@
-const { WorkspaceChats } = require("../../models/workspaceChats.js");
+const { Chat } = require("../../models/workspaceChats.js");
 const { safeJsonParse } = require("../../utils/http/index.js");
 const { getBaseLLMProviderModel } = require("../../utils/helpers/index.js");
 const AIbitat = require("../../utils/agents/aibitat/index.js");
@@ -40,35 +40,22 @@ WHAT TO SKIP:
 
 When finished you MUST call the submit-observations tool.`;
 
-const REFLECTOR_SYSTEM_PROMPT = `You are a memory reflector for a personalized AI assistant. You review candidate observations and decide which ones should actually be saved as memories.
-
-You will be shown:
-1. Candidate observations from recent conversations (with confidence levels)
-2. All existing GLOBAL memories for this user
-3. All existing WORKSPACE memories for this workspace
-
-Your job:
-1. CLASSIFY SCOPE — For each candidate, ask: "Would knowing this help the assistant in a completely different workspace/project?"
-   - YES → GLOBAL (e.g., "User's name is Tim", "User prefers concise responses", "User is a senior engineer")
-   - NO  → WORKSPACE (e.g., "Working on a math conjectures project", "Prefers visual aids for this project")
-
-2. DEDUPLICATE — Drop any candidate that overlaps with an existing memory, even if worded differently. Do NOT create near-duplicates.
-
-3. CONSOLIDATE — If a candidate updates or refines an existing WORKSPACE memory, return it as an "update" action with the ID of the memory to update, rather than creating a new one. GLOBAL memories are never updated — only new ones are appended.
-
-4. FILTER — Drop "low" confidence candidates unless they are clearly a user identity fact (name, role, company). Drop "medium" confidence candidates unless they are strong persistent preferences.
-
-When finished you MUST call the save-memories tool. An empty list is correct if all candidates were duplicates or low-value. That is a good outcome.`;
+const REFLECTOR_SYSTEM_PROMPT = `You are a memory reflector for a personalized AI assistant. Review candidate observations against this user's existing personal memories.
+DEDUPLICATE: drop overlaps, including differently worded duplicates.
+CONSOLIDATE: update an existing memory by its ID when an observation refines it.
+FILTER: drop low-confidence candidates unless explicitly stated identity facts; keep persistent facts and preferences only.
+All memories are personal to this user. Never create shared company knowledge.
+When finished call save-memories. An empty list is correct if nothing should change.`;
 
 /**
  * Group chats by (user_id, workspaceId).
  * @param {object[]} chats
  * @returns {Map<string, object[]>}
  */
-function groupByUserWorkspace(chats) {
+function groupByUser(chats) {
   const groups = new Map();
   for (const chat of chats) {
-    const key = `${chat.user_id}:${chat.workspaceId}`;
+    const key = `${chat.tenantId}:${chat.userId}`;
     if (!groups.has(key)) groups.set(key, []);
     groups.get(key).push(chat);
   }
@@ -80,17 +67,18 @@ function groupByUserWorkspace(chats) {
  * Drop chats that died mid-stream / are pending, then reverse to chronological order.
  * @returns {Promise<object[]>}
  */
-async function loadLatestChats(userId, workspaceId) {
-  const latest = await WorkspaceChats.where(
-    { user_id: userId, workspaceId, include: true },
-    CHATS_PER_RUN_LIMIT,
-    { createdAt: "desc" }
+async function loadLatestChats(ctx) {
+  const latest = await Chat.where(
+    ctx,
+    { include: true },
+    { limit: CHATS_PER_RUN_LIMIT, orderBy: { id: "desc" } }
   );
   return latest
-    .filter((c) => {
-      const parsed = safeJsonParse(c.response);
-      return typeof parsed?.text === "string" && parsed.text.length > 0;
-    })
+    .filter(
+      (chat) =>
+        typeof safeJsonParse(chat.response)?.text === "string" &&
+        safeJsonParse(chat.response).text.length
+    )
     .reverse();
 }
 
@@ -98,15 +86,20 @@ async function loadLatestChats(userId, workspaceId) {
  * Pick a provider/model: workspace chat → workspace agent → system default.
  * @returns {{provider: string, model: string}|null}
  */
-function resolveLLM(workspace) {
-  if (workspace.chatProvider && workspace.chatModel)
-    return { provider: workspace.chatProvider, model: workspace.chatModel };
-  if (workspace.agentProvider && workspace.agentModel)
-    return { provider: workspace.agentProvider, model: workspace.agentModel };
+function resolveLLM(configuration = {}) {
+  if (configuration.chatProvider && configuration.chatModel)
+    return {
+      provider: configuration.chatProvider,
+      model: configuration.chatModel,
+    };
+  if (configuration.agentProvider && configuration.agentModel)
+    return {
+      provider: configuration.agentProvider,
+      model: configuration.agentModel,
+    };
   const provider = process.env.LLM_PROVIDER;
   const model = provider ? getBaseLLMProviderModel({ provider }) : null;
-  if (provider && model) return { provider, model };
-  return null;
+  return provider && model ? { provider, model } : null;
 }
 
 // ── Phase 1: Observer ────────────────────────────────────────────────
@@ -217,42 +210,13 @@ async function runObserver({ provider, model, userMessage }) {
 
 // ── Phase 2: Reflector ───────────────────────────────────────────────
 
-function buildReflectorUserMessage(
-  candidates,
-  workspaceMemories,
-  globalMemories,
-  globalSlots
-) {
-  const formatMemoryList = (memories) => {
-    if (memories.length === 0) return "None.";
-    return memories.map((m) => `- [ID: ${m.id}] ${m.content}`).join("\n");
-  };
-
-  const formatCandidates = (obs) =>
-    obs
-      .map(
-        (o, i) =>
-          `${i + 1}. "${o.content}" (confidence: ${o.confidence}) — ${o.reasoning}`
-      )
-      .join("\n");
-
-  const sections = [];
-
-  sections.push(
-    `Candidate observations from the Observer:\n${formatCandidates(candidates)}`
-  );
-
-  sections.push(
-    `Existing GLOBAL memories:\n${formatMemoryList(globalMemories)}`
-  );
-  if (globalSlots > 0) sections.push(`Available GLOBAL slots: ${globalSlots}`);
-  else sections.push(`GLOBAL is full — do not return any GLOBAL memories.`);
-
-  sections.push(
-    `Existing WORKSPACE memories:\n${formatMemoryList(workspaceMemories)}`
-  );
-
-  return sections.join("\n\n");
+function buildReflectorUserMessage(candidates, memories, availableSlots) {
+  const listed = memories.length
+    ? memories
+        .map((memory) => `- [ID: ${memory.id}] ${memory.content}`)
+        .join("\n")
+    : "None.";
+  return `Candidate observations:\n${candidates.map((item, index) => `${index + 1}. "${item.content}" (${item.confidence}) — ${item.reasoning}`).join("\n")}\n\nExisting personal memories:\n${listed}\n\nAvailable slots for new memories: ${Math.max(0, availableSlots)}`;
 }
 
 /**
@@ -290,9 +254,9 @@ async function runReflector({ provider, model, userMessage }) {
                 },
                 scope: {
                   type: "string",
-                  enum: ["WORKSPACE", "GLOBAL"],
+                  enum: ["PERSONAL"],
                   description:
-                    "GLOBAL for facts useful across all workspaces, WORKSPACE for project-specific facts.",
+                    "Personal facts and preferences belonging to this user.",
                 },
                 action: {
                   type: "string",
@@ -330,7 +294,7 @@ async function runReflector({ provider, model, userMessage }) {
                   m !== null &&
                   typeof m.content === "string" &&
                   m.content.trim().length > 0 &&
-                  ["WORKSPACE", "GLOBAL"].includes(m.scope) &&
+                  m.scope === "PERSONAL" &&
                   ["create", "update", "skip"].includes(m.action)
               )
               .filter((m) => m.action !== "skip")
@@ -356,7 +320,7 @@ async function runReflector({ provider, model, userMessage }) {
 }
 
 module.exports = {
-  groupByUserWorkspace,
+  groupByUser,
   loadLatestChats,
   resolveLLM,
   buildObserverUserMessage,

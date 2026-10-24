@@ -46,12 +46,8 @@ https://github.com/Mintplex-Labs/anythingllm-embed/blob/main/README.md
 
 const ScriptTag = ({ embed }) => {
   const [copied, setCopied] = useState(false);
-  const scriptHost = import.meta.env.DEV
-    ? "http://localhost:3000"
-    : window.location.origin;
-  const serverHost = import.meta.env.DEV
-    ? "http://localhost:3001"
-    : window.location.origin;
+  const scriptHost = embed.webURL || window.location.origin;
+  const serverHost = embed.webURL || window.location.origin;
   const snippet = createScriptTagSnippet(embed, scriptHost, serverHost);
   const theme =
     window.localStorage.getItem("theme") === "light" ? "github" : "github-dark";
@@ -70,7 +66,7 @@ const ScriptTag = ({ embed }) => {
       <div className="flex flex-col gap-y-1 mb-3">
         <ModalLabel>HTML Script Tag Embed Code</ModalLabel>
         <ModalHint>
-          Have your workspace chat embed function like a help desk chat bottom
+          Have your knowledge chat embed function like a help desk chat bottom
           in the corner of your website.
         </ModalHint>
         <a

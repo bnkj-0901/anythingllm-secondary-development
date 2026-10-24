@@ -16,10 +16,8 @@ async function handleThreadPagination({
   messageId,
   data,
 } = {}) {
-  const parts = data.slice(5).split(":");
-  const workspaceId = parseInt(parts[0], 10);
-  const page = parseInt(parts[1], 10);
-  await showThreadMenu(ctx, chatId, workspaceId, page, messageId);
+  const page = parseInt(data.slice(5), 10);
+  await showThreadMenu(ctx, chatId, null, page, messageId);
   await ctx.bot.answerCallbackQuery(query.id);
 }
 

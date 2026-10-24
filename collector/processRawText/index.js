@@ -69,7 +69,7 @@ const METADATA_KEYS = {
   },
 };
 
-async function processRawText(textContent, metadata) {
+async function processRawText(textContent, metadata, options = {}) {
   console.log(`-- Working Raw Text doc ${metadata?.title} --`);
   if (typeof textContent !== "string" || textContent.length === 0) {
     return {
@@ -106,6 +106,9 @@ async function processRawText(textContent, metadata) {
   const document = writeToServerDocuments({
     data,
     filename: `raw-${stripAndSlug(metadata.title)}-${data.id}`,
+    ...(options.returnDocuments === true && {
+      options: { returnDocuments: true },
+    }),
   });
   console.log(
     `[SUCCESS]: Raw text and metadata saved & ready for embedding.\n`

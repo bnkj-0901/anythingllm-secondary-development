@@ -108,17 +108,59 @@ const CommunityHub = {
    */
   applyItem: async function (item, options = {}) {
     if (!item) return { success: false, error: "Item is required" };
+    if (options.currentContext?.identity !== "platform")
+      return {
+        success: false,
+        error: "Only the top administrator can import shared templates",
+      };
+    const store = require("../enterprise/store");
+    const { assertManagerContext, context } = require("../enterprise/auth");
 
     if (item.itemType === "system-prompt") {
-      if (!options?.workspaceSlug)
-        return { success: false, error: "Workspace slug is required" };
-
-      const { Workspace } = require("./workspace");
-      const workspace = await Workspace.get({
-        slug: String(options.workspaceSlug),
-      });
-      if (!workspace) return { success: false, error: "Workspace not found" };
-      await Workspace.update(workspace.id, { openAiPrompt: item.prompt });
+      if (typeof options.tenantId !== "string" || !options.tenantId)
+        return {
+          success: false,
+          error: "Select a tenant for this system prompt",
+        };
+      const {
+        getSettings,
+        validateSettings,
+      } = require("../enterprise/rag-settings");
+      await store.transaction(
+        async (tx) => {
+          await assertManagerContext(options.currentContext, tx);
+          if (
+            !(await tx.one(
+              "SELECT id FROM ep_tenants WHERE id=$1",
+              options.tenantId
+            ))
+          )
+            throw new Error("Tenant not found");
+          const current = await getSettings(options.tenantId, tx);
+          const settings = validateSettings(
+            { openAiPrompt: item.prompt },
+            current
+          );
+          if (
+            current.openAiPrompt &&
+            current.openAiPrompt !== settings.openAiPrompt
+          )
+            await tx.orm.prompt_history.create({
+              data: {
+                tenantId: options.tenantId,
+                prompt: current.openAiPrompt,
+                modifiedBy: options.currentContext.userId,
+              },
+            });
+          await tx.run(
+            'INSERT INTO ep_rag_settings("tenantId",settings,"updatedAt") VALUES($1,$2,$3) ON CONFLICT("tenantId") DO UPDATE SET settings=excluded.settings,"updatedAt"=excluded."updatedAt"',
+            options.tenantId,
+            JSON.stringify(settings),
+            store.now()
+          );
+        },
+        { retry: true }
+      );
       return { success: true, error: null };
     }
 
@@ -133,11 +175,34 @@ const CommunityHub = {
             "Cannot import a preset with a command that matches a system command",
         };
 
-      await SlashCommandPresets.create(options?.currentUser?.id, {
-        command,
-        prompt: String(item.prompt),
-        description: String(item.description),
-      });
+      if (
+        typeof options.tenantId !== "string" ||
+        !Number.isInteger(options.userId) ||
+        !options.tenantId ||
+        !options.userId
+      )
+        return {
+          success: false,
+          error: "Select a tenant user for this slash command",
+        };
+      await store.transaction(
+        async (tx) => {
+          await assertManagerContext(options.currentContext, tx);
+          const user = await context(options.userId, tx);
+          if (user.tenantId !== options.tenantId)
+            throw new Error("User does not belong to the selected tenant");
+          await SlashCommandPresets.create(
+            user,
+            {
+              command,
+              prompt: String(item.prompt),
+              description: String(item.description),
+            },
+            tx.orm
+          );
+        },
+        { retry: true }
+      );
       return { success: true, error: null };
     }
 

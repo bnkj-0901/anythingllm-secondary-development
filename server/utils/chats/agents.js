@@ -3,7 +3,6 @@ const {
   WorkspaceAgentInvocation,
 } = require("../../models/workspaceAgentInvocation");
 const { writeResponseChunk } = require("../helpers/chat/responses");
-const { Workspace } = require("../../models/workspace");
 
 /**
  * In-memory cache for attachments associated with agent invocations.
@@ -41,6 +40,15 @@ function getAndClearInvocationAttachments(uuid) {
  * @type {Map<string, string>}
  */
 const invocationReasoningEffortCache = new Map();
+function cacheInvocationOptions(uuid, { attachments = [], reasoningEffort = null } = {}) {
+  cacheInvocationAttachments(uuid, attachments);
+  if (reasoningEffort) invocationReasoningEffortCache.set(uuid, reasoningEffort);
+  const cleanup = setTimeout(() => {
+    invocationAttachmentsCache.delete(uuid);
+    invocationReasoningEffortCache.delete(uuid);
+  }, 60000);
+  cleanup.unref?.();
+}
 
 /**
  * Retrieve and remove the session reasoning effort for an invocation UUID
@@ -58,25 +66,25 @@ async function grepAgents({
   response,
   message,
   workspace,
-  user = null,
+  user: _user = null,
   thread = null,
   attachments = [],
   reasoningEffort = null,
+  ctx = null,
 }) {
   let nativeToolingEnabled = false;
 
   // If the workspace is in automatic mode, check if the workspace supports native tooling
   // to determine if the agent flow should be used or not.
   if (workspace?.chatMode === "automatic")
-    nativeToolingEnabled = await Workspace.supportsNativeToolCalling(workspace);
+    nativeToolingEnabled = await require("../agents").AgentHandler.supportsNativeToolCalling(workspace);
 
   const agentHandles = WorkspaceAgentInvocation.parseAgents(message);
   if (agentHandles.length > 0 || nativeToolingEnabled) {
     const { invocation: newInvocation } = await WorkspaceAgentInvocation.new({
       prompt: message,
-      workspace: workspace,
-      user: user,
-      thread: thread,
+      ctx,
+      threadId: thread?.id,
     });
 
     if (!newInvocation) {
@@ -133,4 +141,5 @@ module.exports = {
   grepAgents,
   getAndClearInvocationAttachments,
   getAndClearInvocationReasoningEffort,
+  cacheInvocationOptions,
 };

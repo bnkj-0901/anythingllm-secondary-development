@@ -1,15 +1,15 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 class VoyageAiEmbedder {
   constructor() {
-    if (!process.env.VOYAGEAI_API_KEY)
-      throw new Error("No Voyage AI API key was set.");
+    if (!env.VOYAGEAI_API_KEY) throw new Error("No Voyage AI API key was set.");
 
     const {
       VoyageEmbeddings,
     } = require("@langchain/community/embeddings/voyage");
 
-    this.model = process.env.EMBEDDING_MODEL_PREF || "voyage-3-lite";
+    this.model = env.EMBEDDING_MODEL_PREF || "voyage-3-lite";
     this.voyage = new VoyageEmbeddings({
-      apiKey: process.env.VOYAGEAI_API_KEY,
+      apiKey: env.VOYAGEAI_API_KEY,
       modelName: this.model,
       // Voyage AI's limit per request is 128 https://docs.voyageai.com/docs/rate-limits#use-larger-batches
       batchSize: 128,

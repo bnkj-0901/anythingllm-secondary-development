@@ -35,7 +35,7 @@ class AnythingLLMModelRouter {
    * @param {Object} context - { prompt, conversationHistory, conversationTokenCount }
    * @param {Object} opts - { user, thread }
    */
-  async resolve(context = {}, { user = null, thread = null } = {}) {
+  async resolve(context = {}, { user = null, thread = null, ctx = null } = {}) {
     this.router = await this.routerService.resolveRouterForWorkspace(
       this.workspace
     );
@@ -46,8 +46,8 @@ class AnythingLLMModelRouter {
     const stickyMs = (this.router.cooldown_seconds ?? 300) * 1000;
     this._routeKey = this.routerService.routeCacheKey(
       user?.id,
-      this.workspace.slug,
-      thread?.slug
+      ctx?.tenantId || this.workspace.tenantId || "platform",
+      thread?.id || thread?.slug
     );
 
     this.routerService.logRoutingContext(this.router, rules, context);

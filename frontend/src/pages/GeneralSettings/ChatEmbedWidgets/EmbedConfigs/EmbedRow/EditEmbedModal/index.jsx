@@ -4,7 +4,7 @@ import {
   ChatModeSelection,
   NumberInput,
   PermittedDomains,
-  WorkspaceSelection,
+  LibrarySelection,
   enforceSubmissionSchema,
 } from "../../NewEmbedModal";
 import Embed from "@/models/embed";
@@ -40,7 +40,10 @@ export default function EditEmbedModal({ embed, closeModal }) {
     <form onSubmit={handleUpdate} className="flex flex-col gap-y-5">
       <ModalHeader title={`Update embed #${embed.id}`} onClose={closeModal} />
       <ModalBody>
-        <WorkspaceSelection defaultValue={embed.workspace.id} />
+        <LibrarySelection
+          defaultValue={embed.libraryId}
+          defaultTenantId={embed.tenantId}
+        />
         <ChatModeSelection defaultValue={embed.chat_mode} />
         <PermittedDomains
           defaultValue={safeJsonParse(embed.allowlist_domains, null) || []}
@@ -66,19 +69,19 @@ export default function EditEmbedModal({ embed, closeModal }) {
         <BooleanInput
           name="allow_model_override"
           title="Enable dynamic model use"
-          hint="Allow setting of the preferred LLM model to override the workspace default."
+          hint="Allow setting of the preferred LLM model to override the enterprise default."
           defaultValue={embed.allow_model_override}
         />
         <BooleanInput
           name="allow_temperature_override"
           title="Enable dynamic LLM temperature"
-          hint="Allow setting of the LLM temperature to override the workspace default."
+          hint="Allow setting of the LLM temperature to override the enterprise default."
           defaultValue={embed.allow_temperature_override}
         />
         <BooleanInput
           name="allow_prompt_override"
           title="Enable Prompt Override"
-          hint="Allow setting of the system prompt to override the workspace default."
+          hint="Allow setting of the system prompt to override the enterprise default."
           defaultValue={embed.allow_prompt_override}
         />
 

@@ -1,6 +1,5 @@
 const {
   userFromSession,
-  multiUserMode,
   safeJsonParse,
 } = require("../utils/http");
 const { validatedRequest } = require("../utils/middleware/validatedRequest");
@@ -8,9 +7,6 @@ const {
   flexUserRoleValid,
   ROLES,
 } = require("../utils/middleware/multiUserProtected");
-const { WorkspaceChats } = require("../models/workspaceChats");
-const { Workspace } = require("../models/workspace");
-const { ScheduledJobRun } = require("../models/scheduledJobRun");
 const createFilesLib = require("../utils/agents/aibitat/plugins/create-files/lib");
 const { Telemetry } = require("../models/telemetry");
 
@@ -31,7 +27,7 @@ function agentFileServerEndpoints(app) {
     [validatedRequest, flexUserRoleValid([ROLES.all])],
     async (request, response) => {
       try {
-        const user = await userFromSession(request, response);
+        await userFromSession(request, response);
         const { filename } = request.params;
         if (!filename)
           return response.status(400).json({ error: "Filename is required" });
@@ -45,10 +41,7 @@ function agentFileServerEndpoints(app) {
         }
 
         // Find a chat or scheduled job run that references this file
-        const fileSource = await findFileSource(filename, {
-          user,
-          isMultiUser: multiUserMode(response),
-        });
+        const fileSource = await findFileSource(filename, request.ep);
 
         if (!fileSource) {
           return response.status(404).json({
@@ -103,16 +96,13 @@ function agentFileServerEndpoints(app) {
           generatedImagesPath,
           GENERATED_IMAGE_FILENAME_PATTERN,
         } = require("../utils/files");
-        const user = await userFromSession(request, response);
+        await userFromSession(request, response);
         const { filename } = request.params;
 
         if (!filename || !GENERATED_IMAGE_FILENAME_PATTERN.test(filename))
           return response.status(400).json({ error: "Invalid filename" });
 
-        const fileSource = await findFileSource(filename, {
-          user,
-          isMultiUser: multiUserMode(response),
-        });
+        const fileSource = await findFileSource(filename, request.ep);
         if (!fileSource)
           return response
             .status(404)
@@ -150,83 +140,30 @@ function agentFileServerEndpoints(app) {
  * @param {{ user: object|null, isMultiUser: boolean }} ctx
  * @returns {Promise<{workspaceId: number|null, displayFilename: string}|null>}
  */
-async function findFileSource(storageFilename, { user, isMultiUser }) {
-  try {
-    const fromChat = await findInWorkspaceChats(storageFilename, {
-      user,
-      isMultiUser,
-    });
-    if (fromChat) return fromChat;
-
-    if (isMultiUser) return null;
-
-    return await findInScheduledJobRuns(storageFilename);
-  } catch (error) {
-    console.error("[findFileSource] Error:", error.message);
-    return null;
-  }
-}
-
-// Search workspace chats the user has access to. In single-user mode all
-// workspaces are accessible; in multi-user mode only workspaces assigned to
-// the user are. Returns the matching chat's workspace + display filename.
-async function findInWorkspaceChats(storageFilename, { user, isMultiUser }) {
-  const workspaces =
-    isMultiUser && user
-      ? await Workspace.whereWithUser(user)
-      : await Workspace.where();
-
-  const workspaceIds = workspaces.map((w) => w.id);
-  if (workspaceIds.length === 0) return null;
-
-  // DB-level filter so we don't load every chat into memory.
-  const chats = await WorkspaceChats.where({
-    workspaceId: { in: workspaceIds },
-    response: { contains: storageFilename },
-  });
-
+async function findFileSource(storageFilename, ctx, db = require("../enterprise/store").orm) {
+  if (!ctx) return null;
+  const scope = ctx.identity === "platform" ? {} : require("../models/workspaceChats").chatScope(ctx);
+  const chats = await db.chats.findMany({where: {...scope, response: {contains: storageFilename}}});
   for (const chat of chats) {
-    const { outputs = [], text } = safeJsonParse(chat.response, {
-      outputs: [],
-    });
-    // A hidden chat is either an agent reply still being written (no text yet)
-    // or history the user cleared - only the former can still serve its files.
+    const {outputs = [], text} = safeJsonParse(chat.response, {});
     if (!chat.include && !!text) continue;
-    const output = outputs.find(
-      (o) => o?.payload?.storageFilename === storageFilename
-    );
-    if (!output) continue;
-    return {
-      workspaceId: chat.workspaceId,
-      displayFilename:
-        output.payload.filename || output.payload.displayFilename,
-    };
+    const output = outputs.find((item) => item?.payload?.storageFilename === storageFilename);
+    if (output) return {conversationId:chat.thread_id, displayFilename:output.payload.filename || output.payload.displayFilename};
   }
-
-  return null;
-}
-
-// Search completed scheduled job runs. Scheduled jobs are single-user only,
-// so this skips access control. Returns the matching run's display filename.
-async function findInScheduledJobRuns(storageFilename) {
-  const runs = await ScheduledJobRun.where({
-    status: "completed",
-    result: { contains: storageFilename },
+  const runs = await db.scheduled_job_runs.findMany({
+    where: {status:"completed", result:{contains:storageFilename}, ...(ctx.identity === "platform" ? {} : {job:scope})},
   });
-
   for (const run of runs) {
-    const { outputs = [] } = safeJsonParse(run.result, { outputs: [] });
-    const output = outputs.find(
-      (o) => o?.payload?.storageFilename === storageFilename
-    );
-    if (!output) continue;
-    return {
-      workspaceId: null,
-      displayFilename: output.payload.filename || storageFilename,
-    };
+    const {outputs = []} = safeJsonParse(run.result, {});
+    const output = outputs.find((item) => item?.payload?.storageFilename === storageFilename);
+    if (output) return {displayFilename:output.payload.filename || storageFilename};
   }
-
   return null;
 }
-
-module.exports = { agentFileServerEndpoints };
+async function validateGeneratedImageAccess(attachments, ctx, db) {
+  if (!Array.isArray(attachments)) throw Object.assign(new Error("Invalid attachments"), {status:400});
+  for (const attachment of attachments)
+    if (attachment?.storageFilename && !await findFileSource(attachment.storageFilename, ctx, db))
+      throw Object.assign(new Error("Image not found or access denied"), {status:404});
+}
+module.exports = { agentFileServerEndpoints, findFileSource, validateGeneratedImageAccess };

@@ -1,3 +1,8 @@
+const {
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -16,16 +21,16 @@ class CerebrasLLM {
 
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.CEREBRAS_API_KEY)
-      throw new Error("No Cerebras API key was set.");
+    if (!env.CEREBRAS_API_KEY) throw new Error("No Cerebras API key was set.");
 
     this.className = "CerebrasLLM";
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.cerebras.ai/v1",
-      apiKey: process.env.CEREBRAS_API_KEY,
-    });
-    this.model =
-      modelPreference || process.env.CEREBRAS_MODEL_PREF || "gpt-oss-120b";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.cerebras.ai/v1",
+        apiKey: env.CEREBRAS_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.CEREBRAS_MODEL_PREF || "gpt-oss-120b";
     // Lazy load the limits to avoid blocking the main thread on cacheContextWindows
     this.limits = null;
 
@@ -116,7 +121,7 @@ class CerebrasLLM {
         "No context windows cached - Context window may be inaccurately reported."
       );
       return (
-        Number(process.env.CEREBRAS_MODEL_TOKEN_LIMIT) || // Legacy support for old ENV
+        Number(env.CEREBRAS_MODEL_TOKEN_LIMIT) || // Legacy support for old ENV
         MODEL_MAP.get("cerebras", modelName) || // Use the model map for the context window
         128000 // Default to 128000 if no context window is found and modelMap is not available
       );
@@ -271,11 +276,14 @@ class CerebrasLLM {
   async getModelCapabilities() {
     try {
       const capabilities =
-        (await fetch(`https://api.cerebras.ai/public/v1/models/${this.model}`, {
-          headers: {
-            "Content-Type": "application/json",
-          },
-        })
+        (await scopedFetch(
+          `https://api.cerebras.ai/public/v1/models/${this.model}`,
+          {
+            headers: {
+              "Content-Type": "application/json",
+            },
+          }
+        )
           .then((res) => {
             if (!res.ok)
               throw new Error(

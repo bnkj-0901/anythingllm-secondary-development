@@ -1,26 +1,29 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { parseLemonadeServerEndpoint } = require("../../AiProviders/lemonade");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 class LemonadeEmbedder {
   constructor() {
-    if (!process.env.EMBEDDING_BASE_PATH)
+    if (!env.EMBEDDING_BASE_PATH)
       throw new Error("No Lemonade API Base Path was set.");
-    if (!process.env.EMBEDDING_MODEL_PREF)
+    if (!env.EMBEDDING_MODEL_PREF)
       throw new Error("No Embedding Model Pref was set.");
     this.className = "LemonadeEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.lemonade = new OpenAIApi({
-      baseURL: parseLemonadeServerEndpoint(
-        process.env.EMBEDDING_BASE_PATH,
-        "openai"
-      ),
-      apiKey: process.env.LEMONADE_LLM_API_KEY || null,
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF;
+    this.lemonade = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseLemonadeServerEndpoint(env.EMBEDDING_BASE_PATH, "openai"),
+        apiKey: env.LEMONADE_LLM_API_KEY || null,
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF;
 
     this.maxConcurrentChunks = 50;
     this.embeddingMaxChunkLength =
-      process.env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH || 8_191;
+      env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH || 8_191;
   }
 
   log(text, ...args) {

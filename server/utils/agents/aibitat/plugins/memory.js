@@ -1,8 +1,3 @@
-const { v4 } = require("uuid");
-const {
-  getVectorDbClass,
-  resolveProviderConnector,
-} = require("../../../helpers");
 const { Deduplicator } = require("../utils/dedupe");
 
 const memory = {
@@ -19,7 +14,7 @@ const memory = {
           tracker: new Deduplicator(),
           name: this.name,
           description:
-            "Search your local documents and workspace files for relevant information, or store information to long-term memory. Use search to find answers in uploaded documents, embedded files, or previously stored memories. Use store only when explicitly asked to remember or save something.",
+            "Search your authorized knowledge libraries for relevant information, or save information to an authorized library. Use search to find answers in uploaded documents, embedded files, or previously saved knowledge. Use store only when explicitly asked to remember or save something.",
           examples: [
             {
               prompt: "Check my files for information about the project",
@@ -58,23 +53,28 @@ const memory = {
                 description:
                   "The plain text to search our local documents with or to store in our vector database.",
               },
+              libraryId: {
+                type: "string",
+                description: "Target authorized knowledge library for store. Required when there is not exactly one private library.",
+              },
             },
             additionalProperties: false,
           },
-          handler: async function ({ action = "", content = "" }) {
+          handler: async function ({ action = "", content = "", libraryId = null }) {
             try {
               const { isDuplicate } = this.tracker.isDuplicate(this.name, {
                 action,
                 content,
+                libraryId,
               });
               if (isDuplicate)
                 return `This was a duplicated call and it's output will be ignored.`;
 
               let response = "There was nothing to do.";
               if (action === "search") response = await this.search(content);
-              if (action === "store") response = await this.store(content);
+              if (action === "store") response = await this.store(content, libraryId);
 
-              this.tracker.trackRun(this.name, { action, content });
+              this.tracker.trackRun(this.name, { action, content, libraryId });
               return response;
             } catch (error) {
               console.log(error);
@@ -83,22 +83,18 @@ const memory = {
           },
           search: async function (query = "") {
             try {
-              const workspace = this.super.handlerProps.invocation.workspace;
-              const { connector: LLMConnector } =
-                await resolveProviderConnector({
-                  workspace,
-                  prompt: query,
-                });
-              const vectorDB = getVectorDbClass();
-              const { contextTexts = [], sources = [] } =
-                await vectorDB.performSimilaritySearch({
-                  namespace: workspace.slug,
-                  input: query,
-                  LLMConnector,
-                  similarityThreshold: workspace?.similarityThreshold ?? 0.25,
-                  topN: workspace?.topN ?? 4,
-                  rerank: workspace?.vectorSearchMode === "rerank",
-                });
+              const ctx =
+                await require("../../../../enterprise/execution-context").loadExecutionContext(
+                  this.super.handlerProps.ctx
+                );
+              const providers = require("../../../../enterprise/providers");
+              const { retrieve } = require("../../../../enterprise/rag");
+              const connection = await providers.resolveConnection(
+                ctx,
+                "embedding"
+              );
+              const sources = await retrieve(ctx, query, connection);
+              const contextTexts = sources.map((source) => source.text);
 
               if (contextTexts.length === 0) {
                 this.super.introspect(
@@ -123,35 +119,38 @@ const memory = {
               return `An error was raised while searching the vector database. ${error.message}`;
             }
           },
-          store: async function (content = "") {
+          store: async function (content = "", libraryId = null) {
             try {
-              const workspace = this.super.handlerProps.invocation.workspace;
-              const vectorDB = getVectorDbClass();
-              const { error } = await vectorDB.addDocumentToNamespace(
-                workspace.slug,
-                {
-                  docId: v4(),
-                  id: v4(),
-                  url: "file://embed-via-agent.txt",
-                  title: "agent-memory.txt",
-                  docAuthor: "@agent",
-                  description: "Unknown",
-                  docSource: "a text file stored by the workspace agent.",
-                  chunkSource: "",
-                  published: new Date().toLocaleString(),
-                  wordCount: content.split(" ").length,
-                  pageContent: content,
-                  token_count_estimate: 0,
-                },
-                null
-              );
-
-              if (!!error)
-                return "The content was failed to be embedded properly.";
+              const ctx =
+                await require("../../../../enterprise/execution-context").loadExecutionContext(
+                  this.super.handlerProps.ctx
+                );
+              if (!libraryId) {
+                const { Document } = require("../../../../models/documents");
+                const libraries = await require("../../../prisma").ep_libraries.findMany({
+                  where: {
+                    AND: [Document.libraryScope(ctx), {
+                      grants: { none: { tenantId: { not: null } } },
+                    }],
+                  },
+                  take: 2,
+                });
+                if (libraries.length !== 1)
+                  return "Ask the user to choose an authorized knowledge library before saving, then pass its libraryId.";
+                libraryId = libraries[0].id;
+              }
+              const result = await require("../../../../enterprise/knowledge").submitText(ctx, {
+                libraryId,
+                title: "agent-memory.txt",
+                content,
+                metadata: { docAuthor: "@agent", docSource: "a text entry saved by the agent" },
+              });
               this.super.introspect(
-                `${this.caller}: I saved the content to long-term memory in this workspaces vector database.`
+                `${this.caller}: ${result.approvalRequired ? "Submitted this knowledge change for administrator approval." : "Saved this content to the authorized knowledge library."}`
               );
-              return "The content given was successfully embedded. There is nothing else to do.";
+              return result.approvalRequired
+                ? "The knowledge change awaits administrator approval and is not searchable yet."
+                : "The content was saved to the knowledge library and will be searchable after indexing completes.";
             } catch (error) {
               this.super.handlerProps.log(
                 `memory.store raised an error. ${error.message}`

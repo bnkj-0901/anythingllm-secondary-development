@@ -1,9 +1,12 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 class CohereEmbedder {
   constructor() {
-    if (!process.env.COHERE_API_KEY)
-      throw new Error("No Cohere API key was set.");
+    if (!env.COHERE_API_KEY) throw new Error("No Cohere API key was set.");
     this.className = "CohereEmbedder";
 
     // Cohere exposes an OpenAI-compatible API which lets us reuse the OpenAI SDK
@@ -11,12 +14,14 @@ class CohereEmbedder {
     // manages the embedding `input_type` internally so we do not set it ourselves.
     // https://docs.cohere.com/docs/compatibility-api
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.cohere.ai/compatibility/v1",
-      apiKey: process.env.COHERE_API_KEY,
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.cohere.ai/compatibility/v1",
+        apiKey: env.COHERE_API_KEY,
+      })
+    );
 
-    this.model = process.env.EMBEDDING_MODEL_PREF || "embed-english-v3.0";
+    this.model = env.EMBEDDING_MODEL_PREF || "embed-english-v3.0";
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 96; // Cohere's limit per request is 96

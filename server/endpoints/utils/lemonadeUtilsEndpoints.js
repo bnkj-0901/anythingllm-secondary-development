@@ -8,19 +8,23 @@ const { safeJsonParse, decodeHtmlEntities } = require("../../utils/http");
 const {
   parseLemonadeServerEndpoint,
 } = require("../../utils/AiProviders/lemonade");
+const { env } = require("../../enterprise/ai/connection-context");
 
-function lemonadeUtilsEndpoints(app) {
+function lemonadeUtilsEndpoints(
+  app,
+  middleware = [validatedRequest, flexUserRoleValid([ROLES.admin])]
+) {
   if (!app) return;
 
   app.post(
     "/utils/lemonade/download-model",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    middleware,
     async (request, response) => {
       try {
         const { modelId, basePath = "" } = reqBody(request);
         const lemonadeUrl = new URL(
           parseLemonadeServerEndpoint(
-            basePath ?? process.env.LEMONADE_LLM_BASE_PATH,
+            basePath ?? env.LEMONADE_LLM_BASE_PATH,
             "base"
           )
         );
@@ -34,8 +38,8 @@ function lemonadeUtilsEndpoints(app) {
         const lemonadeResponse = await fetch(lemonadeUrl.toString(), {
           method: "POST",
           headers: {
-            ...(!!process.env.LEMONADE_LLM_API_KEY
-              ? { Authorization: `Bearer ${process.env.LEMONADE_LLM_API_KEY}` }
+            ...(!!env.LEMONADE_LLM_API_KEY
+              ? { Authorization: `Bearer ${env.LEMONADE_LLM_API_KEY}` }
               : {}),
             "Content-Type": "application/json",
           },
@@ -110,7 +114,7 @@ function lemonadeUtilsEndpoints(app) {
 
   app.post(
     "/utils/lemonade/delete-model",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    middleware,
     async (request, response) => {
       try {
         const { modelId, basePath = "" } = reqBody(request);
@@ -123,7 +127,7 @@ function lemonadeUtilsEndpoints(app) {
 
         const lemonadeUrl = new URL(
           parseLemonadeServerEndpoint(
-            basePath ?? process.env.LEMONADE_LLM_BASE_PATH,
+            basePath ?? env.LEMONADE_LLM_BASE_PATH,
             "base"
           )
         );
@@ -132,8 +136,8 @@ function lemonadeUtilsEndpoints(app) {
         const lemonadeResponse = await fetch(lemonadeUrl.toString(), {
           method: "POST",
           headers: {
-            ...(!!process.env.LEMONADE_LLM_API_KEY
-              ? { Authorization: `Bearer ${process.env.LEMONADE_LLM_API_KEY}` }
+            ...(!!env.LEMONADE_LLM_API_KEY
+              ? { Authorization: `Bearer ${env.LEMONADE_LLM_API_KEY}` }
               : {}),
             "Content-Type": "application/json",
           },

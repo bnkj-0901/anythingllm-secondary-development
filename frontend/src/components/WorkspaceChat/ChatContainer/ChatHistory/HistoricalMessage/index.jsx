@@ -44,6 +44,7 @@ const HistoricalMessage = ({
   attachments = [],
   error = false,
   feedbackScore = null,
+  updateFeedback,
   chatId = null,
   isLastMessage = false,
   regenerateMessage,
@@ -52,6 +53,10 @@ const HistoricalMessage = ({
   metrics = {},
   outputs = [],
   clarifyingQuestions = [],
+  onSources,
+  ttsEnabled = true,
+  ttsChatId = chatId,
+  fetchTTSAudio,
 }) => {
   // Freeze uuid on first render. User messages arrive without a uuid and this value
   // is used as the wrapper div's `key` — a default param fallback would regenerate
@@ -128,6 +133,7 @@ const HistoricalMessage = ({
           <Actions
             message={message}
             feedbackScore={feedbackScore}
+            updateFeedback={updateFeedback}
             chatId={chatId}
             slug={workspace?.slug}
             isLastMessage={isLastMessage}
@@ -190,14 +196,18 @@ const HistoricalMessage = ({
         )}
         {hasVisibleContent(message) && (
           <div className="flex items-start md:items-center gap-x-1">
-            <TTSMessage
-              slug={workspace?.slug}
-              chatId={chatId}
-              message={message}
-            />
+            {ttsEnabled && (
+              <TTSMessage
+                slug={workspace?.slug}
+                chatId={ttsChatId}
+                message={message}
+                fetchAudio={fetchTTSAudio}
+              />
+            )}
             <Actions
               message={message}
               feedbackScore={feedbackScore}
+              updateFeedback={updateFeedback}
               chatId={chatId}
               slug={workspace?.slug}
               isLastMessage={isLastMessage}
@@ -209,7 +219,9 @@ const HistoricalMessage = ({
             />
           </div>
         )}
-        {role === "assistant" && <Citations sources={sources} />}
+        {role === "assistant" && (
+          <Citations sources={sources} onSources={onSources} />
+        )}
       </div>
     </div>
   );
@@ -228,6 +240,9 @@ export default memo(
       prevProps.message === nextProps.message &&
       prevProps.isLastMessage === nextProps.isLastMessage &&
       prevProps.chatId === nextProps.chatId &&
+      prevProps.ttsChatId === nextProps.ttsChatId &&
+      prevProps.ttsEnabled === nextProps.ttsEnabled &&
+      prevProps.fetchTTSAudio === nextProps.fetchTTSAudio &&
       JSON.stringify(prevProps.metrics) === JSON.stringify(nextProps.metrics) &&
       JSON.stringify(prevProps.sources) === JSON.stringify(nextProps.sources) &&
       JSON.stringify(prevProps.clarifyingQuestions) ===

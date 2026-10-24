@@ -10,6 +10,7 @@ export default function MobileCitationModal({
   isOpen,
   selectedSource,
   setSelectedSource,
+  onSourceSelect = setSelectedSource,
   onClose,
 }) {
   const sources = combineLikeSources(rawSources);
@@ -44,7 +45,7 @@ export default function MobileCitationModal({
                 <SourceItem
                   key={source.title || idx}
                   source={source}
-                  onClick={() => setSelectedSource(source)}
+                  onClick={() => onSourceSelect(source)}
                 />
               ))}
             </div>

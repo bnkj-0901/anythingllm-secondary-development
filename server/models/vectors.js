@@ -1,78 +1,57 @@
 const prisma = require("../utils/prisma");
 const { Document } = require("./documents");
 
+function scope(ctx, clause = {}) {
+  if (ctx?.identity === "platform" && typeof ctx.userId === "string" && ctx.userId)
+    return clause;
+  if (
+    typeof ctx?.tenantId !== "string" ||
+    !ctx.tenantId ||
+    !Number.isInteger(ctx?.userId) ||
+    ctx.userId < 1 ||
+    ctx.identity === "platform"
+  )
+    throw Object.assign(new Error("索引操作需要企业用户身份"), { status: 403 });
+  return {
+    AND: [
+      clause,
+      {
+        document: {
+          library: Document.libraryScope(ctx),
+        },
+      },
+    ],
+  };
+}
+
 const DocumentVectors = {
-  bulkInsert: async function (vectorRecords = []) {
-    if (vectorRecords.length === 0) return;
-
-    try {
-      const inserts = [];
-      vectorRecords.forEach((record) => {
-        inserts.push(
-          prisma.document_vectors.create({
-            data: {
-              docId: record.docId,
-              vectorId: record.vectorId,
-            },
-          })
-        );
-      });
-      await prisma.$transaction(inserts);
-      return { documentsInserted: inserts.length };
-    } catch (error) {
-      console.error("Bulk insert failed", error);
-      return { documentsInserted: 0 };
+  async bulkInsert(ctx, records = [], db = prisma) {
+    if (!records.length) return { documentsInserted: 0 };
+    const documents = new Map();
+    for (const documentId of new Set(
+      records.map((record) => record.documentId)
+    )) {
+      const document = await Document.get(ctx, { id: documentId }, db);
+      if (!document)
+        throw Object.assign(new Error("资料不存在或无权访问"), { status: 404 });
+      documents.set(documentId, document);
     }
+    const result = await db.document_vectors.createMany({
+      data: records.map((record) => ({
+        ...record,
+        tenantId: documents.get(record.documentId).tenantId,
+      })),
+    });
+    return { documentsInserted: result.count };
   },
-
-  where: async function (clause = {}, limit) {
-    try {
-      const results = await prisma.document_vectors.findMany({
-        where: clause,
-        take: limit || undefined,
-      });
-      return results;
-    } catch (error) {
-      console.error("Where query failed", error);
-      return [];
-    }
+  async where(ctx, clause = {}, db = prisma) {
+    return db.document_vectors.findMany({ where: scope(ctx, clause) });
   },
-
-  deleteForWorkspace: async function (workspaceId) {
-    const documents = await Document.forWorkspace(workspaceId);
-    const docIds = [...new Set(documents.map((doc) => doc.docId))];
-
-    try {
-      await prisma.document_vectors.deleteMany({
-        where: { docId: { in: docIds } },
-      });
-      return true;
-    } catch (error) {
-      console.error("Delete for workspace failed", error);
-      return false;
-    }
+  async delete(ctx, clause = {}, db = prisma) {
+    return db.document_vectors.deleteMany({ where: scope(ctx, clause) });
   },
-
-  deleteIds: async function (ids = []) {
-    try {
-      await prisma.document_vectors.deleteMany({
-        where: { id: { in: ids } },
-      });
-      return true;
-    } catch (error) {
-      console.error("Delete IDs failed", error);
-      return false;
-    }
-  },
-
-  delete: async function (clause = {}) {
-    try {
-      await prisma.document_vectors.deleteMany({ where: clause });
-      return true;
-    } catch (error) {
-      console.error("Delete failed", error);
-      return false;
-    }
+  async deleteIds(ctx, ids = [], db = prisma) {
+    return this.delete(ctx, { id: { in: ids } }, db);
   },
 };
 

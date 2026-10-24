@@ -5,7 +5,10 @@ import { useEffect, useState } from "react";
 import { Plus, X } from "@phosphor-icons/react";
 import { useTranslation } from "react-i18next";
 
-export default function SuggestedChatMessages({ slug }) {
+export default function SuggestedChatMessages({
+  slug,
+  resourceApi = Workspace,
+}) {
   const [suggestedMessages, setSuggestedMessages] = useState([]);
   const [editingIndex, setEditingIndex] = useState(-1);
   const [newMessage, setNewMessage] = useState({ heading: "", message: "" });
@@ -15,8 +18,8 @@ export default function SuggestedChatMessages({ slug }) {
   useEffect(() => {
     async function fetchWorkspace() {
       if (!slug) return;
-      const suggestedMessages = await Workspace.getSuggestedMessages(slug);
-      setSuggestedMessages(suggestedMessages);
+      const suggestedMessages = await resourceApi.getSuggestedMessages(slug);
+      setSuggestedMessages(suggestedMessages || []);
       setLoading(false);
     }
     fetchWorkspace();
@@ -26,7 +29,7 @@ export default function SuggestedChatMessages({ slug }) {
     const validMessages = suggestedMessages.filter(
       (msg) => msg?.message?.trim()?.length > 0
     );
-    const { success, error } = await Workspace.setSuggestedMessages(
+    const { success, error } = await resourceApi.setSuggestedMessages(
       slug,
       validMessages
     );

@@ -26,7 +26,7 @@
           :disabled="disabled"
           :placeholder="placeholder || '发送消息…'"
           :focus="requestFocus"
-          :maxlength="20000"
+          :maxlength="maxLength"
           :auto-height="true"
           :fixed="true"
           :adjust-position="false"
@@ -71,6 +71,7 @@
           <wd-button
             v-else
             type="primary"
+            :loading="sending"
             :disabled="!canSend"
             custom-class="composer-send"
             custom-style="width:36px;height:36px;min-width:36px;padding:0;border-radius:10px;"
@@ -102,6 +103,7 @@ const props = defineProps({
   modelValue: { type: String, default: "" },
   disabled: { type: Boolean, default: false },
   sending: { type: Boolean, default: false },
+  maxLength: { type: Number, default: 20000 },
   compact: { type: Boolean, default: false },
   placeholder: { type: String, default: "" },
   contextLabel: { type: String, default: "" },

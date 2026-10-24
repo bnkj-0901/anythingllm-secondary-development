@@ -14,9 +14,6 @@ const DEFAULT_SKILLS = [
   AgentPlugins.webBrowsing.name,
 ];
 
-// Skills that must never be injected when the instance is running in multi-user mode.
-const SINGLE_USER_ONLY_SKILLS = new Set(["create-scheduled-job"]);
-
 /**
  * Configuration for agent skills that require availability checks and disabled sub-skill lists.
  * Each entry maps a skill name to its availability checker and disabled skills list key.
@@ -73,13 +70,15 @@ const WORKSPACE_AGENT = {
     _provider = null,
     workspace = null,
     user = null,
-    prompt = ""
+    prompt = "",
+    ctx = null
   ) => {
     let [role, clarifyingQuestionsSkills] = await Promise.all([
       Provider.systemPrompt({
         workspace,
         user,
         prompt,
+        ctx,
       }),
       clarifyingQuestionsSkillIfEnabled(),
     ]);
@@ -95,8 +94,8 @@ const WORKSPACE_AGENT = {
         ...(await agentSkillsFromSystemSettings()),
         ...clarifyingQuestionsSkills,
         ...ImportedPlugin.activeImportedPlugins(),
-        ...AgentFlows.activeFlowPlugins(),
-        ...(await new MCPCompatibilityLayer().activeMCPServers()),
+        ...AgentFlows.activeFlowPlugins(ctx),
+        ...(await new MCPCompatibilityLayer().activeMCPServers(ctx)),
       ],
     };
   },
@@ -130,8 +129,6 @@ async function clarifyingQuestionsSkillIfEnabled() {
  */
 async function agentSkillsFromSystemSettings() {
   const systemFunctions = [];
-  const isMultiUser = await SystemSettings.isMultiUserMode();
-
   // Load non-imported built-in skills that are configurable, but are default enabled.
   const _disabledDefaultSkills = safeJsonParse(
     await SystemSettings.getValueOrFallback(
@@ -173,7 +170,6 @@ async function agentSkillsFromSystemSettings() {
 
   for (const skillName of _setting) {
     if (!AgentPlugins.hasOwnProperty(skillName)) continue;
-    if (isMultiUser && SINGLE_USER_ONLY_SKILLS.has(skillName)) continue;
 
     // This is a plugin module with many sub-children plugins who
     // need to be named via `${parent}#${child}` naming convention

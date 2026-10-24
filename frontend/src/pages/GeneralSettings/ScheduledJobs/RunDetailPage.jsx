@@ -60,16 +60,16 @@ export default function RunDetailPage() {
 
   const handleContinueInThread = async () => {
     setContinuing(true);
-    const { workspaceSlug, threadSlug, error } =
+    const { conversationId, error } =
       await ScheduledJobs.continueInThread(runId);
 
-    if (error || !workspaceSlug || !threadSlug) {
+    if (error || !conversationId) {
       showToast(error || t("scheduledJobs.runDetail.threadFailed"), "error");
       setContinuing(false);
       return;
     }
 
-    navigate(paths.workspace.thread(workspaceSlug, threadSlug));
+    navigate(`/chat?conversationId=${encodeURIComponent(conversationId)}`);
   };
 
   const handleKillRun = async () => {

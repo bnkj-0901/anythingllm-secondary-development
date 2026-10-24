@@ -60,7 +60,18 @@ async function handleSourceSelect({
     return;
   }
 
-  const source = sources[sourceIdx];
+  const identity = await ctx.identity(chatId);
+  const live = await require("../../../../../enterprise/rag").currentSources(
+    identity,
+    [sources[sourceIdx]]
+  );
+  if (!live.length) {
+    await ctx.bot.answerCallbackQuery(query.id, {
+      text: "Source no longer accessible",
+    });
+    return;
+  }
+  const source = live[0];
   const title = getSourceTitle(source, sourceIdx);
 
   if (isWebSource(source)) {

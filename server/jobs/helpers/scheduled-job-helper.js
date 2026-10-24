@@ -91,7 +91,8 @@ async function sendWebPushNotification(job, runId, textResponse, logFn) {
     let notificationBody = stripThinkingFromText(textResponse);
     notificationBody = truncateNotificationBody(notificationBody);
     await pushNotificationService.sendNotification({
-      to: "primary",
+      to: job.userId,
+      tenantId: job.tenantId,
       payload: {
         title: `${job.name} completed`,
         body: notificationBody,

@@ -1,5 +1,15 @@
 /* eslint-env jest */
 const { EventEmitter } = require("events");
+jest.mock("../../enterprise/auth", () => ({
+  requireAuth: (req, _res, next) => {
+    req.ep = { identity: "tenant", tenantId: "tenant-a", userId: "user-a" };
+    next();
+  },
+  refreshContext: jest.fn(async (ctx) => ctx),
+}));
+jest.mock("../../endpoints/agentFileServer", () => ({
+  validateGeneratedImageAccess: jest.fn(async () => {}),
+}));
 
 jest.mock("../../models/telemetry", () => ({
   Telemetry: { sendTelemetry: jest.fn().mockResolvedValue() },
@@ -27,6 +37,8 @@ jest.mock("../../utils/agents", () => {
     }
     async createAIbitat({ socket }) {
       this.aibitat = {
+        emitter: new (require("events").EventEmitter)(),
+        abortController: new AbortController(),
         onError: jest.fn(),
         onMessage: jest.fn(),
         onTerminate: jest.fn(),
@@ -66,7 +78,12 @@ async function openSession() {
   socket.readyState = 1;
   socket.send = jest.fn();
   socket.close = jest.fn();
-  await route(socket, { params: { uuid: "test-uuid" } });
+  await route(socket, { headers: {}, params: { uuid: "test-uuid" } });
+  socket.emit(
+    "message",
+    JSON.stringify({ type: "authenticate", token: "test-token" })
+  );
+  await flushPromises();
 
   const [relay] = socket.listeners("message");
   return { socket, relay: (frame) => relay.call(socket, frame) };
@@ -166,10 +183,10 @@ describe("agentWebsocket relayToSocket", () => {
     expect(typeof socket.handleFeedback).toBe("function");
   });
 
-  it("honors a bail command sent as a binary frame", () => {
+  it("honors a bail command sent as a binary frame", async () => {
     const { socket, relay } = session;
 
-    relay(Buffer.from(JSON.stringify({ feedback: "exit" })));
+    await relay(Buffer.from(JSON.stringify({ feedback: "exit" })));
 
     expect(socket.close).toHaveBeenCalled();
   });

@@ -126,7 +126,7 @@ export function combineLikeSources(sources) {
   return Object.values(combined);
 }
 
-export default function Citations({ sources = [] }) {
+export default function Citations({ sources = [], onSources }) {
   const {
     sidebarOpen,
     openSidebar,
@@ -141,6 +141,7 @@ export default function Citations({ sources = [] }) {
   const remainingCount = Math.max(0, combined.length - 3);
 
   function handleOpenSourcesSidebar() {
+    if (onSources) return onSources(sources);
     if (sidebarOpen && sources === currentSources) {
       closeSidebar();
     } else {
@@ -190,7 +191,7 @@ export default function Citations({ sources = [] }) {
   );
 }
 
-export function omitChunkHeader(text) {
+export function omitChunkHeader(text = "") {
   if (!text.includes("<document_metadata>")) return text;
   return text.split("</document_metadata>")[1].trim();
 }

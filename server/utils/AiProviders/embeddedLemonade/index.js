@@ -1,5 +1,9 @@
 const fs = require("fs");
 const path = require("path");
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -48,12 +52,14 @@ class EmbeddedLemonadeLLM {
         "The built-in LLM engine is not enabled. Set ENABLE_BUILT_IN_LLM=true when starting the AnythingLLM Docker container."
       );
     this.className = "EmbeddedLemonadeLLM";
-    this.model = modelPreference || process.env.EMBEDDED_LEMONADE_MODEL_PREF;
+    this.model = modelPreference || env.EMBEDDED_LEMONADE_MODEL_PREF;
     this.embedder = embedder ?? new NativeEmbedder();
-    this.client = new OpenAIApi({
-      baseURL: EmbeddedLemonadeLLM.openaiBasePath(),
-      apiKey: "not-used",
-    });
+    this.client = new OpenAIApi(
+      sdkOptions({
+        baseURL: EmbeddedLemonadeLLM.openaiBasePath(),
+        apiKey: "not-used",
+      })
+    );
     this.#setLimits();
     this.#log(`initialized with model: ${this.model}`);
   }

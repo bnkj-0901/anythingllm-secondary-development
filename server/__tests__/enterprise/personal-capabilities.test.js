@@ -1,0 +1,98 @@
+const { createPostgresFixture } = require("./postgres-fixture.cjs");
+const fs = require("fs");
+const path = require("path");
+const { randomUUID } = require("crypto");
+let mockDefaultOrm;
+jest.mock("../../utils/prisma", () => new Proxy({}, {get(_target,key) {
+  const value = mockDefaultOrm[key];
+  return typeof value === "function" ? value.bind(mockDefaultOrm) : value;
+}}));
+const { Memory } = require("../../models/memory");
+const { SlashCommandPresets } = require("../../models/slashCommandsPresets");
+const { Chat } = require("../../models/workspaceChats");
+const { ChatThread } = require("../../models/workspaceThread");
+const { ParsedFiles } = require("../../models/workspaceParsedFiles");
+const { findFileSource, validateGeneratedImageAccess } = require("../../endpoints/agentFileServer");
+const { directUploadsPath } = require("../../utils/files");
+const { grepCommand } = require("../../utils/chats");
+const { resetMemory } = require("../../utils/chats/commands/reset");
+let fixture, db;
+const owner={identity:"tenant",tenantId:"personal-a",userId:1};
+const peer={identity:"tenant",tenantId:"personal-a",userId:2};
+const foreign={identity:"tenant",tenantId:"personal-b",userId:3};
+const files=[];
+beforeAll(async()=> {
+  fixture=await createPostgresFixture(); db=fixture.prisma; mockDefaultOrm=db;
+  const stamp=new Date().toISOString();
+  for(const id of [owner.tenantId,foreign.tenantId]) await db.ep_tenants.create({data:{id,code:id,name:id,hostname:`${id}.example.test`,createdAt:stamp,updatedAt:stamp}});
+  for(const ctx of [owner,peer,foreign]) await db.users.create({data:{id:ctx.userId,tenantId:ctx.tenantId,username:`employee-${ctx.userId}`,name:`Employee ${ctx.userId}`,passwordHash:"unused",role:"user",createdAt:stamp,updatedAt:stamp}});
+});
+afterAll(async()=> {
+  for(const file of files) fs.rmSync(path.join(directUploadsPath,file),{force:true});
+  await fixture?.cleanup();
+});
+test("personal presets allow the same command in different users and never expand another user's prompt",async()=> {
+  const one=await SlashCommandPresets.create(owner,{command:"/report",prompt:"OWNER_PROMPT",description:"owner"});
+  const two=await SlashCommandPresets.create(peer,{command:"/report",prompt:"PEER_PROMPT"});
+  await SlashCommandPresets.create(foreign,{command:"/report",prompt:"FOREIGN_PROMPT"});
+  expect(one.id).not.toBe(two.id);
+  expect(await grepCommand("Prepare /report?",owner)).toBe("Prepare OWNER_PROMPT?");
+  expect(await grepCommand("/report",peer)).toBe("PEER_PROMPT");
+  expect(await grepCommand("/reporting",owner)).toBe("/reporting");
+  expect(await grepCommand("/reset",owner)).toBe("/reset");
+  expect(await SlashCommandPresets.update(peer,one.id,{command:"/steal",prompt:"stolen"})).toBeNull();
+  expect(await SlashCommandPresets.delete(foreign,one.id)).toBe(false);
+  expect(await SlashCommandPresets.get(owner,{id:one.id})).toMatchObject({prompt:"OWNER_PROMPT"});
+});
+test("memory CRUD and extracted updates stay personal, with original limit and deduplication",async()=> {
+  const {memory}=await Memory.create(owner,{content:"Owner remembers secret"});
+  expect(await Memory.get(peer,memory.id)).toBeNull();
+  expect((await Memory.update(foreign,memory.id,{content:"stolen"})).memory).toBeNull();
+  expect(await Memory.delete(peer,memory.id)).toBe(false);
+  expect(await Memory.applyExtractedMemories(peer,[{action:"update",updateId:memory.id,content:"stolen"},{action:"create",content:"Peer memory"},{action:"create",content:"Peer memory"}])).toEqual({createdCount:1,updatedCount:0});
+  for(let i=1;i<Memory.PERSONAL_LIMIT;i++) await Memory.create(owner,{content:`memory ${i}`});
+  expect((await Memory.create(owner,{content:"over the limit"})).memory).toBeNull();
+  expect((await Memory.forUser(owner))).toHaveLength(Memory.PERSONAL_LIMIT);
+  expect((await Memory.forUser(peer)).map(m=>m.content)).toEqual(["Peer memory"]);
+});
+test("forked attachments have separate files; deleting original never destroys the fork",async()=> {
+  const source=(await ChatThread.new(owner,{name:"Source"})).thread;
+  const target=(await ChatThread.new(owner,{name:"Fork"})).thread;
+  const wrong=(await ChatThread.new(peer,{name:"Not yours"})).thread;
+  const filename=`${randomUUID()}.json`; files.push(filename);
+  fs.mkdirSync(directUploadsPath,{recursive:true});
+  fs.writeFileSync(path.join(directUploadsPath,filename),JSON.stringify({pageContent:"Private temporary document"}));
+  const {file}=await ParsedFiles.create(owner,{threadId:source.id,filename:"quote.txt",metadata:{location:filename,title:"quote"},tokenCountEstimate:10});
+  await expect(ParsedFiles.create(owner,{threadId:wrong.id,filename:"escape",metadata:{}})).rejects.toMatchObject({status:404});
+  expect(await ParsedFiles.get(peer,file.id)).toBeNull();
+  expect(await ParsedFiles.getContextFiles(peer,source.id)).toEqual([]);
+  await ParsedFiles.fork(owner,source.id,target.id);
+  const [copied]=await ParsedFiles.where(owner,target.id);
+  const copyLocation=JSON.parse(copied.metadata).location; files.push(copyLocation);
+  expect(copyLocation).not.toBe(filename);
+  await ParsedFiles.delete(owner,[file.id]);
+  expect(fs.existsSync(path.join(directUploadsPath,filename))).toBe(false);
+  expect((await ParsedFiles.getContextFiles(owner,target.id))[0].pageContent).toBe("Private temporary document");
+});
+test("generated output downloads require an exact personal output reference, and revoke hidden completed answers after reset",async()=> {
+  const thread=(await ChatThread.new(owner,{name:"Output"})).thread;
+  const filename=`img_${randomUUID()}.png`;
+  const {chat}=await Chat.new(owner,{threadId:thread.id,prompt:"draw",response:{text:"answer",outputs:[{type:"imageGenerationCard",payload:{storageFilename:filename,filename:"draw.png"}}]}});
+  expect(await findFileSource(filename,owner)).toMatchObject({conversationId:thread.id,displayFilename:"draw.png"});
+  expect(await findFileSource(filename,peer)).toBeNull();
+  expect(await findFileSource(filename,foreign)).toBeNull();
+  expect(await findFileSource(filename,{identity:"platform"})).not.toBeNull();
+  await expect(validateGeneratedImageAccess([{storageFilename:filename}],peer)).rejects.toMatchObject({status:404});
+  await resetMemory({ctx:owner,threadId:thread.id,configuration:{},db});
+  expect((await Chat.get(owner,{id:chat.id})).include).toBe(false);
+  expect(await findFileSource(filename,owner)).toBeNull();
+  await Chat.delete(owner,{id:chat.id});
+  expect(await findFileSource(filename,owner)).toBeNull();
+});
+test("scheduled output lookup authorizes the task owner",async()=> {
+  const job=await db.scheduled_jobs.create({data:{tenantId:owner.tenantId,userId:owner.userId,name:"Report",prompt:"report",schedule:"0 8 * * *"}});
+  const storageFilename=`report-${randomUUID()}.pdf`;
+  await db.scheduled_job_runs.create({data:{jobId:job.id,status:"completed",result:JSON.stringify({outputs:[{type:"fileDownloadCard",payload:{storageFilename,filename:"report.pdf"}}]})}});
+  expect(await findFileSource(storageFilename,owner)).toMatchObject({displayFilename:"report.pdf"});
+  expect(await findFileSource(storageFilename,peer)).toBeNull();
+});

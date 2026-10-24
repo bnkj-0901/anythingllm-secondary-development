@@ -13,6 +13,8 @@ const { tokenizeString } = require("../../../tokenizer");
  * @returns
  */
 async function loadGitlabRepo(args, response) {
+  const returnDocuments = response.locals.returnDocuments === true;
+  const documents = [];
   const repo = new RepoLoader(args);
   await repo.init();
 
@@ -46,7 +48,7 @@ async function loadGitlabRepo(args, response) {
         )
       : path.resolve(process.env.STORAGE_DIR, `documents/${outFolder}`);
 
-  if (!fs.existsSync(outFolderPath))
+  if (!returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
 
   for (const doc of docs) {
@@ -98,16 +100,21 @@ async function loadGitlabRepo(args, response) {
       `[GitLab Loader]: Saving ${doc.metadata.source} to ${outFolder}`
     );
 
-    writeToServerDocuments({
-      data,
-      filename: sanitizeFileName(`${slugify(doc.metadata.source)}-${data.id}`),
-      destinationOverride: outFolderPath,
-    });
+    if (returnDocuments) documents.push(data);
+    else
+      writeToServerDocuments({
+        data,
+        filename: sanitizeFileName(
+          `${slugify(doc.metadata.source)}-${data.id}`
+        ),
+        destinationOverride: outFolderPath,
+      });
   }
 
   return {
     success: true,
     reason: null,
+    ...(returnDocuments ? { documents } : {}),
     data: {
       author: repo.author,
       repo: repo.project,

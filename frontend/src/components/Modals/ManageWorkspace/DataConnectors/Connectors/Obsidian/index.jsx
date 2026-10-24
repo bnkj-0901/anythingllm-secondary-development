@@ -4,7 +4,7 @@ import { FolderOpen, Info } from "@phosphor-icons/react";
 import System from "@/models/system";
 import showToast from "@/utils/toast";
 
-export default function ObsidianOptions() {
+export default function ObsidianOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [vaultPath, setVaultPath] = useState("");
@@ -48,7 +48,9 @@ export default function ObsidianOptions() {
         })
       );
 
-      const { data, error } = await System.dataConnectors.obsidian.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.obsidian.collect
+      )({
         files: fileContents,
       });
 
@@ -57,6 +59,12 @@ export default function ObsidianOptions() {
         setLoading(false);
         setSelectedFiles([]);
         setVaultPath("");
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
+        setLoading(false);
         return;
       }
 

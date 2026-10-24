@@ -263,7 +263,7 @@ class GmailBridge {
   async initialize() {
     try {
       const isMultiUser = await SystemSettings.isMultiUserMode();
-      if (isMultiUser) {
+      if (isMultiUser && !SystemSettings.hasTenantConfiguration()) {
         return {
           success: false,
           error:
@@ -306,7 +306,7 @@ class GmailBridge {
    */
   static async isToolAvailable() {
     const isMultiUser = await SystemSettings.isMultiUserMode();
-    if (isMultiUser) return false;
+    if (isMultiUser && !SystemSettings.hasTenantConfiguration()) return false;
 
     const config = await GmailBridge.getConfig();
     return !!(config.deploymentId && config.apiKey);
@@ -565,7 +565,7 @@ class GmailBridge {
   }
 }
 
-module.exports = new GmailBridge();
+module.exports = SystemSettings.tenantBridge(GmailBridge);
 module.exports.GmailBridge = GmailBridge;
 module.exports.prepareAttachment = prepareAttachment;
 module.exports.parseAttachment = parseAttachment;

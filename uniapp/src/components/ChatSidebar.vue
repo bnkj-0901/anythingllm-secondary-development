@@ -59,33 +59,21 @@
           }}</text></view
         >
         <text v-if="!conversations.length" class="history-empty"
-          >从一个问题开始，留下工作灵感</text
+          >暂无对话</text
         >
       </scroll-view>
     </view>
     <view class="sidebar-bottom">
-      <view class="knowledge-note"
-        ><view class="note-icon"><wd-icon name="books" size="19px" /></view
-        ><view
-          ><text class="note-title">共同知识，也有私人空间</text
-          ><text class="note-desc">公有共同维护，私有仅自己</text></view
-        ><wd-button
-          type="icon"
-          icon="arrow-right"
-          aria-label="去上传知识"
-          custom-style="width:24px;min-width:24px;color:#6b8d7c;"
-          @click="$emit('navigate', 'knowledge')"
-      /></view>
       <view
         class="profile"
         role="button"
-        aria-label="切换当前演示账号"
-        @click="$emit('switch-user')"
-        ><view class="avatar">{{ currentUser.name.slice(0, 1) }}</view
+        aria-label="设置"
+        @click="$emit('settings')"
+        ><image v-if="currentUser.avatar" class="avatar" :src="currentUser.avatar" mode="aspectFill" /><view v-else class="avatar">{{ currentUser.name.slice(0, 1) }}</view
         ><view class="profile-copy"
           ><text class="profile-name">{{ currentUser.name }}</text
           ><text class="profile-role">{{ currentUser.role }}</text></view
-        ><view class="profile-badge">切换演示</view></view
+        ><wd-icon name="setting" size="18px" color="#929e95" /></view
       >
     </view>
   </view>
@@ -101,7 +89,7 @@ defineProps({
   mobile: Boolean,
   currentUser: {
     type: Object,
-    default: () => ({ id: "lin", name: "林晓", role: "管理员" }),
+    default: () => ({ id: "", name: "用户", role: "成员" }),
   },
 });
 defineEmits([
@@ -109,12 +97,11 @@ defineEmits([
   "select-conversation",
   "new-conversation",
   "close",
-  "switch-user",
+  "settings",
 ]);
 const navigation = [
   { id: "chat", name: "问答检索", icon: "chat" },
   { id: "knowledge", name: "知识资料", icon: "books" },
-  { id: "erp", name: "ERP 助手", icon: "layers" },
 ];
 </script>
 
@@ -257,31 +244,6 @@ const navigation = [
 .sidebar-bottom {
   flex-shrink: 0;
 }
-.knowledge-note {
-  display: flex;
-  align-items: center;
-  gap: 9px;
-  border: 1px solid #e0e9e3;
-  background: #f1f6f2;
-  padding: 12px 9px;
-  border-radius: 11px;
-  margin-bottom: 18px;
-}
-.note-icon {
-  color: #639780;
-}
-.note-title {
-  display: block;
-  font-size: 11px;
-  color: #5a7766;
-  line-height: 18px;
-}
-.note-desc {
-  display: block;
-  font-size: 10px;
-  color: #91a194;
-  line-height: 17px;
-}
 .profile {
   display: flex;
   align-items: center;
@@ -291,6 +253,7 @@ const navigation = [
   padding-bottom: calc(18px + env(safe-area-inset-bottom));
 }
 .avatar {
+  flex-shrink: 0;
   width: 33px;
   height: 33px;
   border-radius: 50%;
@@ -303,12 +266,16 @@ const navigation = [
 }
 .profile-copy {
   flex: 1;
+  min-width: 0;
 }
 .profile-name {
   display: block;
   font-size: 12px;
   color: #3e5146;
   line-height: 19px;
+  overflow: hidden;
+  white-space: nowrap;
+  text-overflow: ellipsis;
 }
 .profile-role {
   display: block;
@@ -316,17 +283,7 @@ const navigation = [
   color: #9aa49d;
   line-height: 16px;
 }
-.profile-badge {
-  font-size: 9px;
-  padding: 3px 5px;
-  border: 1px solid #dfe6e0;
-  border-radius: 4px;
-  color: #929e95;
-}
 @media (max-height: 650px) {
-  .knowledge-note {
-    display: none;
-  }
   .brand-row {
     height: 78px;
   }

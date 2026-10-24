@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { QdrantClient } = require("@qdrant/js-client-rest");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
@@ -8,6 +9,11 @@ const { sourceIdentifier } = require("../../chats");
 const { VectorDatabase } = require("../base");
 
 class QDrant extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -17,14 +23,12 @@ class QDrant extends VectorDatabase {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "qdrant")
+    if (env.VECTOR_DB !== "qdrant")
       throw new Error("QDrant::Invalid ENV settings");
 
     const client = new QdrantClient({
-      url: process.env.QDRANT_ENDPOINT,
-      ...(process.env.QDRANT_API_KEY
-        ? { apiKey: process.env.QDRANT_API_KEY }
-        : {}),
+      url: env.QDRANT_ENDPOINT,
+      ...(env.QDRANT_API_KEY ? { apiKey: env.QDRANT_API_KEY } : {}),
     });
 
     const isAlive = (await client.api("cluster")?.clusterStatus())?.ok || false;

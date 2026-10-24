@@ -20,7 +20,7 @@ const ScheduledJobRun = {
    * if a `queued` or `running` row already exists, this returns null and the
    * caller should drop the request. The check + insert run inside an
    * interactive transaction so two concurrent callers cannot both pass;
-   * SQLite serializes writes.
+   * PostgreSQL locks the owning job row while claiming.
    *
    * The row is created in `queued` status; the worker transitions it to
    * `running` via markRunning() once it actually begins executing.
@@ -32,6 +32,10 @@ const ScheduledJobRun = {
   start: async function (jobId) {
     try {
       return await prisma.$transaction(async (tx) => {
+        await tx.$queryRawUnsafe(
+          "SELECT id FROM scheduled_jobs WHERE id=$1 FOR UPDATE",
+          Number(jobId)
+        );
         const existing = await tx.scheduled_job_runs.findFirst({
           where: {
             jobId: Number(jobId),
@@ -328,55 +332,30 @@ const ScheduledJobRun = {
    */
   continueInThread: async function (runId) {
     try {
-      const { Workspace } = require("./workspace");
-      const { WorkspaceThread } = require("./workspaceThread");
-      const { WorkspaceChats } = require("./workspaceChats");
+      const { ChatThread } = require("./workspaceThread");
+      const { Chat } = require("./workspaceChats");
+      const { context } = require("../enterprise/auth");
       const { safeJsonParse } = require("../utils/http");
-
       const run = await this.get({ id: Number(runId) }, { job: true });
       if (!run) throw new Error("Run not found");
-
+      const ctx = await context(run.job.userId);
+      if (ctx.tenantId !== run.job.tenantId)
+        throw new Error("Invalid task identity");
       const result = safeJsonParse(run.result, {});
-      const responseText = result?.text || "No response was generated.";
-
-      // Get or create the "Scheduled Jobs" workspace
-      const { workspace, error: workspaceError } = await Workspace.upsert(
-        { slug: "scheduled-jobs" },
-        {
-          name: "Scheduled Jobs",
-          slug: "scheduled-jobs",
-          chatMode: "automatic",
-        }
-      );
-      if (workspaceError)
-        throw new Error(workspaceError || "Failed to create workspace");
-
-      const { thread, message: threadError } =
-        await WorkspaceThread.new(workspace);
-      if (threadError)
-        throw new Error(threadError || "Failed to create thread");
-
-      await WorkspaceChats.new({
-        workspaceId: workspace.id,
+      const { thread } = await ChatThread.new(ctx, { name: run.job.name });
+      await Chat.new(ctx, {
         prompt: run.job.prompt,
+        threadId: thread.id,
         response: {
-          text: responseText,
+          text: result?.text || "No response was generated.",
           sources: result.sources || [],
           outputs: result.outputs || [],
           type: "chat",
         },
-        threadId: thread.id,
-        include: true,
       });
-
-      return {
-        workspace,
-        thread,
-        error: null,
-      };
+      return { thread, error: null };
     } catch (error) {
       return {
-        workspace: null,
         thread: null,
         error: error.message ?? "Unknown error",
       };

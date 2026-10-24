@@ -132,7 +132,7 @@ const httpSocket = {
           } = require("../../../../models/agentSkillWhitelist");
           const isWhitelisted = await AgentSkillWhitelist.isWhitelisted(
             skillName,
-            null
+            aibitat.handlerProps?.ctx?.userId || null
           );
           if (isWhitelisted) {
             console.log(

@@ -1,6 +1,5 @@
 const { log, conclude } = require("./helpers/index.js");
-const { WorkspaceChats } = require("../models/workspaceChats.js");
-const { ScheduledJobRun } = require("../models/scheduledJobRun.js");
+const prisma = require("../utils/prisma");
 const createFilesLib = require("../utils/agents/aibitat/plugins/create-files/lib.js");
 const { safeJsonParse } = require("../utils/http/index.js");
 
@@ -8,7 +7,7 @@ const { safeJsonParse } = require("../utils/http/index.js");
 // the window between writing it to disk and persisting its chat reference.
 const MIN_AGE_MS = 60 * 60 * 1000;
 
-(async () => {
+async function cleanupGeneratedFiles() {
   try {
     const fs = require("fs");
     const path = require("path");
@@ -59,107 +58,100 @@ const MIN_AGE_MS = 60 * 60 * 1000;
   } catch (error) {
     console.error(error);
     log(`Error during cleanup: ${error.message}`);
-  } finally {
-    conclude();
   }
-})();
+}
 
 /**
- * Retrieves all storage filenames referenced in active (include: true) workspace chats.
+ * Retrieves storage filenames referenced in all retained personal chats.
+ * Resetting model context does not delete history or its generated files.
  * Searches through the outputs array in chat responses.
  * Uses pagination to avoid loading all chats into memory at once.
  * @param {number} batchSize - Number of chats to process per batch (default: 50)
  * @returns {Promise<Set<string>>}
  */
 async function getActiveStorageFilenames(batchSize = 50) {
-  const [workspaceChats, scheduledJobRuns] = await Promise.all([
-    workspaceChatGeneratedFilenames(batchSize),
+  const [chats, scheduledJobRuns] = await Promise.all([
+    chatGeneratedFilenames(batchSize),
     scheduledJobRunGeneratedFilenames(batchSize),
   ]);
 
-  return new Set([...workspaceChats, ...scheduledJobRuns]);
+  return new Set([...chats, ...scheduledJobRuns]);
 }
 
-async function workspaceChatGeneratedFilenames(batchSize = 50) {
+async function chatGeneratedFilenames(batchSize = 50) {
   const storageFilenames = new Set();
-  try {
-    let offset = 0;
-    let hasMore = true;
+  let offset = 0;
+  let hasMore = true;
 
-    while (hasMore) {
-      const chats = await WorkspaceChats.where(
-        { include: true },
-        batchSize,
-        { id: "asc" },
-        offset
-      );
+  while (hasMore) {
+    const chats = await prisma.chats.findMany({
+      where: { include: true },
+      select: { response: true },
+      take: batchSize,
+      orderBy: { id: "asc" },
+      skip: offset,
+    });
 
-      if (chats.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      for (const chat of chats) {
-        try {
-          const response = safeJsonParse(chat.response, { outputs: [] });
-          for (const output of response.outputs) {
-            if (!output || !output.payload || !output.payload.storageFilename)
-              continue;
-            storageFilenames.add(output.payload.storageFilename);
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      offset += chats.length;
-      hasMore = chats.length === batchSize;
+    if (chats.length === 0) {
+      hasMore = false;
+      break;
     }
-  } catch (error) {
-    console.error("[workspaceChatGeneratedFilenames] Error:", error.message);
-  }
 
+    for (const chat of chats) {
+      try {
+        const response = safeJsonParse(chat.response, { outputs: [] });
+        for (const output of response.outputs) {
+          if (!output || !output.payload || !output.payload.storageFilename)
+            continue;
+          storageFilenames.add(output.payload.storageFilename);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    offset += chats.length;
+    hasMore = chats.length === batchSize;
+  }
   return storageFilenames;
 }
 
 async function scheduledJobRunGeneratedFilenames(batchSize = 50) {
   const storageFilenames = new Set();
-  try {
-    let offset = 0;
-    let hasMore = true;
+  let offset = 0;
+  let hasMore = true;
 
-    while (hasMore) {
-      const runs = await ScheduledJobRun.where(
-        { status: "completed" },
-        batchSize,
-        { id: "asc" },
-        {},
-        offset
-      );
+  while (hasMore) {
+    const runs = await prisma.scheduled_job_runs.findMany({
+      where: { status: "completed" },
+      select: { result: true },
+      take: batchSize,
+      orderBy: { id: "asc" },
+      skip: offset,
+    });
 
-      if (runs.length === 0) {
-        hasMore = false;
-        break;
-      }
-
-      for (const run of runs) {
-        try {
-          const response = safeJsonParse(run.result, { outputs: [] });
-          for (const output of response.outputs) {
-            if (!output?.payload?.storageFilename) continue;
-            storageFilenames.add(output.payload.storageFilename);
-          }
-        } catch {
-          continue;
-        }
-      }
-
-      offset += runs.length;
-      hasMore = runs.length === batchSize;
+    if (runs.length === 0) {
+      hasMore = false;
+      break;
     }
-  } catch (error) {
-    console.error("[scheduledJobRunGeneratedFilenames] Error:", error.message);
-  }
 
+    for (const run of runs) {
+      try {
+        const response = safeJsonParse(run.result, { outputs: [] });
+        for (const output of response.outputs) {
+          if (!output?.payload?.storageFilename) continue;
+          storageFilenames.add(output.payload.storageFilename);
+        }
+      } catch {
+        continue;
+      }
+    }
+
+    offset += runs.length;
+    hasMore = runs.length === batchSize;
+  }
   return storageFilenames;
 }
+
+if (require.main === module) cleanupGeneratedFiles().finally(conclude);
+module.exports = { cleanupGeneratedFiles, getActiveStorageFilenames };

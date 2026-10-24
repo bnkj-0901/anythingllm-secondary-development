@@ -47,7 +47,9 @@ export const PARSED_FILES_UPDATED_EVENT = "PARSED_FILES_UPDATED";
  */
 
 export function DnDFileUploaderProvider({
-  workspace,
+  workspace = null,
+  scopeKey = null,
+  resourceApi = Workspace,
   threadSlug = null,
   children,
 }) {
@@ -55,8 +57,10 @@ export function DnDFileUploaderProvider({
   return (
     <EmbeddingProgressProvider>
       <DnDFileUploader
-        key={`${workspace.slug}:${threadSlug ?? "default"}`}
+        key={scopeKey || `${workspace?.slug}:${threadSlug ?? "default"}`}
         workspace={workspace}
+        scopeKey={scopeKey}
+        resourceApi={resourceApi}
         threadSlug={threadSlug}
       >
         {children}
@@ -65,7 +69,14 @@ export function DnDFileUploaderProvider({
   );
 }
 
-function DnDFileUploader({ workspace, threadSlug, children }) {
+function DnDFileUploader({
+  workspace,
+  scopeKey,
+  resourceApi,
+  threadSlug,
+  children,
+}) {
+  const resourceKey = scopeKey || workspace?.slug;
   const mountedRef = useRef(true);
   const [files, setFiles] = useState([]);
   const [ready, setReady] = useState(false);
@@ -77,7 +88,7 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
   const [tokenCount, setTokenCount] = useState(0);
   const [maxTokens, setMaxTokens] = useState(Number.POSITIVE_INFINITY);
   const { embeddingProgressMap, startEmbedding } = useEmbeddingProgress();
-  const embeddingProgress = embeddingProgressMap[workspace.slug] || null;
+  const embeddingProgress = embeddingProgressMap[resourceKey] || null;
   const lastEmbeddingProgressRef = useRef(null);
 
   useEffect(() => {
@@ -131,7 +142,7 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
     const { uid, document } = event.detail;
     setFiles((prev) => prev.filter((prevFile) => prevFile.uid !== uid));
     if (!document?.location) return;
-    await Workspace.deleteAndUnembedFile(workspace.slug, document.location);
+    await resourceApi.deleteAndUnembedFile(resourceKey, document.location);
   }
 
   /**
@@ -246,33 +257,78 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
     if (!mountedRef.current) return;
     window.dispatchEvent(new CustomEvent(ATTACHMENTS_PROCESSING_EVENT));
     const promises = [];
+    try {
+      await resourceApi.prepareForUpload?.();
+      if (!mountedRef.current) return;
+      const { currentContextTokenCount, contextWindow } =
+        await resourceApi.getParsedFiles(resourceKey, threadSlug);
+      if (!mountedRef.current) return;
+      const workspaceContextWindow = contextWindow
+        ? Math.floor(contextWindow * Workspace.maxContextWindowLimit)
+        : Number.POSITIVE_INFINITY;
+      setMaxTokens(workspaceContextWindow);
 
-    const { currentContextTokenCount, contextWindow } =
-      await Workspace.getParsedFiles(workspace.slug, threadSlug);
-    if (!mountedRef.current) return;
-    const workspaceContextWindow = contextWindow
-      ? Math.floor(contextWindow * Workspace.maxContextWindowLimit)
-      : Number.POSITIVE_INFINITY;
-    setMaxTokens(workspaceContextWindow);
+      let totalTokenCount = currentContextTokenCount;
+      let batchPendingFiles = [];
 
-    let totalTokenCount = currentContextTokenCount;
-    let batchPendingFiles = [];
+      for (const attachment of newAttachments) {
+        // Images/attachments are chat specific.
+        if (attachment.type === "attachment") continue;
 
-    for (const attachment of newAttachments) {
-      // Images/attachments are chat specific.
-      if (attachment.type === "attachment") continue;
+        const formData = new FormData();
+        formData.append("file", attachment.file, attachment.file.name);
+        formData.append("threadSlug", threadSlug || null);
+        promises.push(
+          resourceApi
+            .parseFile(resourceKey, formData)
+            .then(async ({ response, data }) => {
+              if (!mountedRef.current) return;
+              if (!response.ok) {
+                const updates = {
+                  status: "failed",
+                  error: data?.error ?? null,
+                };
+                setFiles((prev) =>
+                  prev.map(
+                    (
+                      /** @type {Attachment} */
+                      prevFile
+                    ) =>
+                      prevFile.uid !== attachment.uid
+                        ? prevFile
+                        : { ...prevFile, ...updates }
+                  )
+                );
+                return;
+              }
+              // Will always be one file in the array
+              /** @type {ParsedFile} */
+              const file = data.files[0];
 
-      const formData = new FormData();
-      formData.append("file", attachment.file, attachment.file.name);
-      formData.append("threadSlug", threadSlug || null);
-      promises.push(
-        Workspace.parseFile(workspace.slug, formData).then(
-          async ({ response, data }) => {
-            if (!response.ok) {
+              // Add token count for this file
+              // and add it to the batch pending files
+              totalTokenCount += file.tokenCountEstimate;
+              batchPendingFiles.push({
+                attachment,
+                parsedFileId: file.id,
+                tokenCount: file.tokenCountEstimate,
+              });
+
+              if (totalTokenCount > workspaceContextWindow) {
+                setTokenCount(totalTokenCount);
+                setPendingFiles(batchPendingFiles);
+                setShowWarningModal(true);
+                return;
+              }
+
+              // File is within limits, keep in parsed files
+              const result = { success: true, document: file };
               const updates = {
-                status: "failed",
-                error: data?.error ?? null,
+                status: result.success ? "added_context" : "failed",
+                error: result.error ?? null,
+                document: result.document,
               };
+
               setFiles((prev) =>
                 prev.map(
                   (
@@ -284,57 +340,18 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
                       : { ...prevFile, ...updates }
                 )
               );
-              return;
-            }
-            // Will always be one file in the array
-            /** @type {ParsedFile} */
-            const file = data.files[0];
+            })
+        );
+      }
 
-            // Add token count for this file
-            // and add it to the batch pending files
-            totalTokenCount += file.tokenCountEstimate;
-            batchPendingFiles.push({
-              attachment,
-              parsedFileId: file.id,
-              tokenCount: file.tokenCountEstimate,
-            });
-
-            if (totalTokenCount > workspaceContextWindow) {
-              setTokenCount(totalTokenCount);
-              setPendingFiles(batchPendingFiles);
-              setShowWarningModal(true);
-              return;
-            }
-
-            // File is within limits, keep in parsed files
-            const result = { success: true, document: file };
-            const updates = {
-              status: result.success ? "added_context" : "failed",
-              error: result.error ?? null,
-              document: result.document,
-            };
-
-            setFiles((prev) =>
-              prev.map(
-                (
-                  /** @type {Attachment} */
-                  prevFile
-                ) =>
-                  prevFile.uid !== attachment.uid
-                    ? prevFile
-                    : { ...prevFile, ...updates }
-              )
-            );
-          }
-        )
-      );
-    }
-
-    // Wait for all promises to resolve in some way before dispatching the event to unlock the send button
-    Promise.all(promises).finally(() => {
+      // Wait for all promises to resolve in some way before dispatching the event to unlock the send button
+      await Promise.all(promises);
+    } catch (error) {
+      if (mountedRef.current) showToast(error.message, "error");
+    } finally {
       if (mountedRef.current)
         window.dispatchEvent(new CustomEvent(ATTACHMENTS_PROCESSED_EVENT));
-    });
+    }
   }
 
   // Handle modal actions
@@ -342,8 +359,8 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
     if (!pendingFiles.length) return;
 
     // Delete all files from this batch
-    await Workspace.deleteParsedFiles(
-      workspace.slug,
+    await resourceApi.deleteParsedFiles(
+      resourceKey,
       pendingFiles.map((file) => file.parsedFileId)
     );
     if (!mountedRef.current) return;
@@ -390,8 +407,29 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
 
   const handleEmbed = async () => {
     if (!pendingFiles.length) return;
-    const { locations } = await Workspace.moveParsedFiles(
-      workspace.slug,
+    if (resourceApi.saveParsedFiles) {
+      try {
+        await resourceApi.saveParsedFiles(
+          pendingFiles.map((file) => file.parsedFileId)
+        );
+        setFiles((files) =>
+          files.filter(
+            (file) =>
+              !pendingFiles.some(
+                (pending) => pending.attachment.uid === file.uid
+              )
+          )
+        );
+        setShowWarningModal(false);
+        setPendingFiles([]);
+        window.dispatchEvent(new CustomEvent(PARSED_FILES_UPDATED_EVENT));
+      } catch (error) {
+        showToast(error.message, "error");
+      }
+      return;
+    }
+    const { locations } = await resourceApi.moveParsedFiles(
+      resourceKey,
       pendingFiles.map((file) => file.parsedFileId)
     );
     if (!mountedRef.current) return;
@@ -416,8 +454,8 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
     );
     setEmbeddingFiles(queued);
     setShowEmbedProgress(true);
-    Workspace.modifyEmbeddings(workspace.slug, { adds });
-    startEmbedding(workspace.slug, adds);
+    resourceApi.modifyEmbeddings(resourceKey, { adds });
+    startEmbedding(resourceKey, adds);
   };
 
   // The queue clears its progress shortly after the job finishes, so the last
@@ -514,7 +552,7 @@ function DnDFileUploader({ workspace, threadSlug, children }) {
       <EmbeddingProgressModal
         show={showEmbedProgress}
         onClose={() => setShowEmbedProgress(false)}
-        workspaceSlug={workspace.slug}
+        workspaceSlug={resourceKey}
       />
       {children}
     </DndUploaderContext.Provider>
@@ -553,7 +591,7 @@ export default function DnDFileUploaderWrapper({ children }) {
             <p className="text-white text-[24px] font-semibold">Add anything</p>
             <p className="text-white text-[16px] text-center">
               Drop a file or image here to attach it to your <br />
-              workspace auto-magically.
+              conversation.
             </p>
           </div>
         </div>

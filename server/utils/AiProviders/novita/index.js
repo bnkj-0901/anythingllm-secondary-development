@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { v4: uuidv4 } = require("uuid");
 const {
@@ -24,24 +28,23 @@ class NovitaLLM {
   defaultTimeout = 3_000;
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.NOVITA_LLM_API_KEY)
-      throw new Error("No Novita API key was set.");
+    if (!env.NOVITA_LLM_API_KEY) throw new Error("No Novita API key was set.");
 
     this.className = "NovitaLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.basePath = "https://api.novita.ai/v3/openai";
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.NOVITA_LLM_API_KEY ?? null,
-      defaultHeaders: {
-        "HTTP-Referer": "https://anythingllm.com",
-        "X-Novita-Source": "anythingllm",
-      },
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.NOVITA_LLM_API_KEY ?? null,
+        defaultHeaders: {
+          "HTTP-Referer": "https://anythingllm.com",
+          "X-Novita-Source": "anythingllm",
+        },
+      })
+    );
     this.model =
-      modelPreference ||
-      process.env.NOVITA_LLM_MODEL_PREF ||
-      "deepseek/deepseek-r1";
+      modelPreference || env.NOVITA_LLM_MODEL_PREF || "deepseek/deepseek-r1";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -71,11 +74,10 @@ class NovitaLLM {
    */
   #parseTimeout() {
     this.log(
-      `Novita timeout is set to ${process.env.NOVITA_LLM_TIMEOUT_MS ?? this.defaultTimeout}ms`
+      `Novita timeout is set to ${env.NOVITA_LLM_TIMEOUT_MS ?? this.defaultTimeout}ms`
     );
-    if (isNaN(Number(process.env.NOVITA_LLM_TIMEOUT_MS)))
-      return this.defaultTimeout;
-    const setValue = Number(process.env.NOVITA_LLM_TIMEOUT_MS);
+    if (isNaN(Number(env.NOVITA_LLM_TIMEOUT_MS))) return this.defaultTimeout;
+    const setValue = Number(env.NOVITA_LLM_TIMEOUT_MS);
     if (setValue < 500) return 500; // 500ms is the minimum timeout
     return setValue;
   }

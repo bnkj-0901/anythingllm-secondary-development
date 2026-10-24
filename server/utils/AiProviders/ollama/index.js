@@ -1,4 +1,11 @@
 const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
+const {
   writeResponseChunk,
   clientAbortedHandler,
   formatChatHistory,
@@ -20,28 +27,40 @@ const {
 // Docs: https://github.com/jmorganca/ollama/blob/main/docs/api.md
 class OllamaAILLM {
   /** @see OllamaAILLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.OLLAMA_BASE_PATH)
-      throw new Error("No Ollama Base Path was set.");
+    if (!env.OLLAMA_BASE_PATH) throw new Error("No Ollama Base Path was set.");
 
     this.className = "OllamaAILLM";
-    this.authToken = process.env.OLLAMA_AUTH_TOKEN;
-    this.basePath = process.env.OLLAMA_BASE_PATH;
-    this.model = modelPreference || process.env.OLLAMA_MODEL_PREF;
-    this.keepAlive = process.env.OLLAMA_KEEP_ALIVE_TIMEOUT
-      ? Number(process.env.OLLAMA_KEEP_ALIVE_TIMEOUT)
+    this.authToken = env.OLLAMA_AUTH_TOKEN;
+    this.basePath = env.OLLAMA_BASE_PATH;
+    this.model = modelPreference || env.OLLAMA_MODEL_PREF;
+    this.keepAlive = env.OLLAMA_KEEP_ALIVE_TIMEOUT
+      ? Number(env.OLLAMA_KEEP_ALIVE_TIMEOUT)
       : 300; // Default 5-minute timeout for Ollama model loading.
 
     const headers = this.authToken
       ? { Authorization: `Bearer ${this.authToken}` }
       : {};
-    this.client = new Ollama({
-      host: this.basePath,
-      headers: headers,
-      fetch: OllamaAILLM.applyOllamaFetch(),
-    });
+    this.client = new Ollama(
+      sdkOptions({
+        host: this.basePath,
+        headers: headers,
+        fetch: OllamaAILLM.applyOllamaFetch(),
+      })
+    );
     this.embedder = embedder ?? new NativeEmbedder();
 
     // Lazy load the limits to avoid blocking the main thread on cacheContextWindows
@@ -87,12 +106,14 @@ class OllamaAILLM {
       if (Object.keys(OllamaAILLM.modelContextWindows).length > 0 && !force)
         return;
 
-      const authToken = process.env.OLLAMA_AUTH_TOKEN;
-      const basePath = process.env.OLLAMA_BASE_PATH;
-      const client = new Ollama({
-        host: basePath,
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
+      const authToken = env.OLLAMA_AUTH_TOKEN;
+      const basePath = env.OLLAMA_BASE_PATH;
+      const client = new Ollama(
+        sdkOptions({
+          host: basePath,
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        })
+      );
 
       const { models } = await client.list().catch(() => ({ models: [] }));
       if (!models.length) return;
@@ -140,21 +161,21 @@ class OllamaAILLM {
    */
   static applyOllamaFetch() {
     try {
-      if (!("OLLAMA_RESPONSE_TIMEOUT" in process.env)) return fetch;
+      if (!("OLLAMA_RESPONSE_TIMEOUT" in env)) return scopedFetch;
       const { Agent } = require("undici");
       const moment = require("moment");
-      let timeout = process.env.OLLAMA_RESPONSE_TIMEOUT;
+      let timeout = env.OLLAMA_RESPONSE_TIMEOUT;
 
       if (!timeout || isNaN(Number(timeout)) || Number(timeout) <= 5 * 60_000) {
         OllamaAILLM.#slog(
           "Timeout option was not set, is not a number, or is less than 5 minutes in ms - falling back to default",
           { timeout }
         );
-        return fetch;
+        return scopedFetch;
       } else timeout = Number(timeout);
 
       const noTimeoutFetch = (input, init = {}) => {
-        return fetch(input, {
+        return scopedFetch(input, {
           ...init,
           dispatcher: new Agent({ headersTimeout: timeout }),
         });
@@ -168,7 +189,7 @@ class OllamaAILLM {
         "Error applying custom fetch - using default fetch",
         error
       );
-      return fetch;
+      return scopedFetch;
     }
   }
 
@@ -181,18 +202,18 @@ class OllamaAILLM {
       this.#slog(
         "No context windows cached - Context window may be inaccurately reported."
       );
-      return Number(process.env.OLLAMA_MODEL_TOKEN_LIMIT) || 4096;
+      return Number(env.OLLAMA_MODEL_TOKEN_LIMIT) || 4096;
     }
 
     let userDefinedLimit = null;
     const systemDefinedLimit = OllamaAILLM.maxContextWindow(modelName);
 
     if (
-      process.env.OLLAMA_MODEL_TOKEN_LIMIT &&
-      !isNaN(Number(process.env.OLLAMA_MODEL_TOKEN_LIMIT)) &&
-      Number(process.env.OLLAMA_MODEL_TOKEN_LIMIT) > 0
+      env.OLLAMA_MODEL_TOKEN_LIMIT &&
+      !isNaN(Number(env.OLLAMA_MODEL_TOKEN_LIMIT)) &&
+      Number(env.OLLAMA_MODEL_TOKEN_LIMIT) > 0
     )
-      userDefinedLimit = Number(process.env.OLLAMA_MODEL_TOKEN_LIMIT);
+      userDefinedLimit = Number(env.OLLAMA_MODEL_TOKEN_LIMIT);
 
     // The user defined limit is always higher priority than the context window limit, but it cannot be higher than the context window limit
     // so we return the minimum of the two, if there is no user defined limit, we return the system defined limit as-is.

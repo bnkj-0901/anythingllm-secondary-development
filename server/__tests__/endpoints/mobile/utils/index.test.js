@@ -1,128 +1,121 @@
-jest.mock("../../../../utils/prisma", () => ({
-  workspace_threads: { findFirst: jest.fn() },
-}));
 jest.mock("../../../../models/workspaceChats", () => ({
-  WorkspaceChats: { markThreadHistoryInvalidV2: jest.fn() },
-}));
-jest.mock("../../../../models/workspace", () => ({
-  Workspace: { get: jest.fn(), getWithUser: jest.fn() },
+  Chat: { markThreadHistoryInvalid: jest.fn() },
 }));
 jest.mock("../../../../models/workspaceThread", () => ({
-  WorkspaceThread: {},
+  ChatThread: { get: jest.fn() },
 }));
 jest.mock("../../../../models/mobileDevice", () => ({ MobileDevice: {} }));
-jest.mock("../../../../utils/chats/apiChatHandler", () => ({
-  ApiChatHandler: {},
+jest.mock("../../../../enterprise/rag", () => ({ executeChat: jest.fn() }));
+jest.mock("../../../../enterprise/auth", () => ({
+  fail: (status, message) => Object.assign(new Error(message), { status }),
 }));
-jest.mock("../../../../endpoints/utils", () => ({ getModelTag: () => "test" }));
 
-const prisma = require("../../../../utils/prisma");
-const { WorkspaceChats } = require("../../../../models/workspaceChats");
-const { Workspace } = require("../../../../models/workspace");
-const {
-  handleMobileCommand,
-} = require("../../../../endpoints/mobile/utils/index");
+const { Chat } = require("../../../../models/workspaceChats");
+const { ChatThread } = require("../../../../models/workspaceThread");
+const { executeChat } = require("../../../../enterprise/rag");
+const { handleMobileCommand } = require("../../../../endpoints/mobile/utils");
 
-describe("handleMobileCommand: reset-chat", () => {
-  const workspace = { id: 7, slug: "my-ws" };
-
-  function mockResponse() {
+describe("mobile personal conversations", () => {
+  const ctx = { tenantId: "tenant-a", userId: 101, identity: "tenant" };
+  const thread = { id: 201, tenantId: "tenant-a", userId: 101 };
+  function response() {
     return {
-      locals: { user: null },
-      status: jest.fn().mockReturnThis(),
       json: jest.fn().mockReturnThis(),
+      set: jest.fn(),
+      flushHeaders: jest.fn(),
+      write: jest.fn(),
+      on: jest.fn(),
+      off: jest.fn(),
+      end: jest.fn(),
+      writableEnded: false,
     };
   }
-
   beforeEach(() => {
     jest.clearAllMocks();
-    Workspace.get.mockResolvedValue(workspace);
+    ChatThread.get.mockResolvedValue(thread);
   });
 
-  it("scopes the reset to the thread named by threadSlug", async () => {
-    prisma.workspace_threads.findFirst.mockResolvedValue({ id: 42 });
-    const response = mockResponse();
-
+  it("resets only the selected conversation under the device's live identity", async () => {
+    const res = response();
     await handleMobileCommand(
       {
+        ep: ctx,
         params: { command: "reset-chat" },
-        body: { workspaceSlug: "my-ws", threadSlug: "thread-b" },
+        body: { conversationId: thread.id, userId: "other", tenantId: "other" },
       },
-      response
+      res
     );
-
-    expect(WorkspaceChats.markThreadHistoryInvalidV2).toHaveBeenCalledWith({
-      workspaceId: 7,
-      thread_id: 42,
-    });
+    expect(ChatThread.get).toHaveBeenCalledWith(ctx, { id: thread.id });
+    expect(Chat.markThreadHistoryInvalid).toHaveBeenCalledWith(ctx, thread.id);
+    expect(res.json).toHaveBeenCalledWith({ success: true });
   });
 
-  it("rejects an unknown threadSlug instead of resetting the default thread", async () => {
-    prisma.workspace_threads.findFirst.mockResolvedValue(null);
-    const response = mockResponse();
+  it("rejects an inaccessible conversation without resetting any history", async () => {
+    ChatThread.get.mockResolvedValue(null);
+    await expect(
+      handleMobileCommand(
+        {
+          ep: ctx,
+          params: { command: "reset-chat" },
+          body: { conversationId: "other-user" },
+        },
+        response()
+      )
+    ).rejects.toMatchObject({ status: 404 });
+    expect(Chat.markThreadHistoryInvalid).not.toHaveBeenCalled();
+  });
 
+  it("does not fall back to another conversation when the selection is absent", async () => {
+    ChatThread.get.mockResolvedValue(null);
+    await expect(
+      handleMobileCommand(
+        { ep: ctx, params: { command: "reset-chat" }, body: {} },
+        response()
+      )
+    ).rejects.toMatchObject({ status: 404 });
+    expect(Chat.markThreadHistoryInvalid).not.toHaveBeenCalled();
+  });
+
+  it("rejects inaccessible streams before sending SSE headers", async () => {
+    ChatThread.get.mockResolvedValue(null);
+    const res = response();
+    await expect(
+      handleMobileCommand(
+        {
+          ep: ctx,
+          params: { command: "stream-chat" },
+          body: { conversationId: "other-user", message: "hi" },
+        },
+        res
+      )
+    ).rejects.toMatchObject({ status: 404 });
+    expect(res.flushHeaders).not.toHaveBeenCalled();
+    expect(executeChat).not.toHaveBeenCalled();
+  });
+
+  it("awaits streaming and forwards disconnect cancellation to the original chat engine", async () => {
+    const res = response();
+    executeChat.mockImplementation(
+      async ({ ctx: actual, threadId, signal, onEvent }) => {
+        expect(actual).toBe(ctx);
+        expect(threadId).toBe(thread.id);
+        onEvent({ type: "textResponse", textResponse: "hello" });
+        res.on.mock.calls.find(([event]) => event === "close")[1]();
+        expect(signal.aborted).toBe(true);
+      }
+    );
     await handleMobileCommand(
       {
-        params: { command: "reset-chat" },
-        body: { workspaceSlug: "my-ws", threadSlug: "gone" },
-      },
-      response
-    );
-
-    // A stale slug must never fall through to the default thread - that
-    // silently wipes history the user never asked to clear.
-    expect(WorkspaceChats.markThreadHistoryInvalidV2).not.toHaveBeenCalled();
-    expect(response.status).toHaveBeenCalledWith(404);
-    expect(response.json).toHaveBeenCalledWith({ error: "Thread not found" });
-  });
-
-  it("resets the default thread when no threadSlug is given", async () => {
-    const response = mockResponse();
-
-    await handleMobileCommand(
-      {
-        params: { command: "reset-chat" },
-        body: { workspaceSlug: "my-ws" },
-      },
-      response
-    );
-
-    expect(prisma.workspace_threads.findFirst).not.toHaveBeenCalled();
-    expect(WorkspaceChats.markThreadHistoryInvalidV2).toHaveBeenCalledWith({
-      workspaceId: 7,
-      thread_id: null,
-    });
-  });
-});
-
-describe("handleMobileCommand: stream-chat", () => {
-  const workspace = { id: 7, slug: "my-ws" };
-
-  beforeEach(() => {
-    jest.clearAllMocks();
-    Workspace.get.mockResolvedValue(workspace);
-  });
-
-  it("rejects an unknown threadSlug instead of chatting in the default thread", async () => {
-    prisma.workspace_threads.findFirst.mockResolvedValue(null);
-    const response = {
-      locals: { user: null },
-      status: jest.fn().mockReturnThis(),
-      json: jest.fn().mockReturnThis(),
-      setHeader: jest.fn(),
-      flushHeaders: jest.fn(),
-    };
-
-    await handleMobileCommand(
-      {
+        ep: ctx,
         params: { command: "stream-chat" },
-        body: { workspaceSlug: "my-ws", threadSlug: "gone", message: "hi" },
+        body: { conversationId: thread.id, message: "hi" },
       },
-      response
+      res
     );
-
-    expect(response.flushHeaders).not.toHaveBeenCalled();
-    expect(response.status).toHaveBeenCalledWith(404);
-    expect(response.json).toHaveBeenCalledWith({ error: "Thread not found" });
+    expect(res.write).toHaveBeenCalledWith(
+      'data: {"type":"textResponse","textResponse":"hello"}\n\n'
+    );
+    expect(res.end).toHaveBeenCalledTimes(1);
+    expect(res.off).toHaveBeenCalledWith("close", expect.any(Function));
   });
 });

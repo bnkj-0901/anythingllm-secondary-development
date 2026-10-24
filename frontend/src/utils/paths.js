@@ -119,6 +119,7 @@ export default {
     llmPreference: () => {
       return "/settings/llm-preference";
     },
+    retrievalPreference: () => "/settings/retrieval-preference",
     transcriptionPreference: () => {
       return "/settings/transcription-preference";
     },

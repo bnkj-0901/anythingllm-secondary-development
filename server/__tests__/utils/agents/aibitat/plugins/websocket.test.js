@@ -5,6 +5,9 @@ jest.mock("../../../../../models/telemetry", () => ({
 jest.mock("../../../../../models/systemSettings", () => ({
   SystemSettings: { isMultiUserMode: jest.fn().mockResolvedValue(false) },
 }));
+jest.mock("../../../../../enterprise/execution-context", () => ({
+  loadExecutionContext: jest.fn(async (ctx) => ctx),
+}));
 
 const {
   websocket,
@@ -31,6 +34,9 @@ const flushPromises = () =>
 function setupPlugin({ userId = null } = {}) {
   const socket = { send: jest.fn(), close: jest.fn() };
   const aibitat = {
+    handlerProps: { ctx: { identity: "tenant", tenantId: "a", userId: 1, role: "admin" } },
+    emitter: new (require("events").EventEmitter)(),
+    abortController: new AbortController(),
     onError: jest.fn(),
     onMessage: jest.fn(),
     onTerminate: jest.fn(),
@@ -139,9 +145,60 @@ describe("websocket plugin handleFeedback", () => {
 
     expect(jest.getTimerCount()).toBe(0);
   });
+
+  it("clears feedback waits immediately when the authenticated connection closes", async () => {
+    const { socket, aibitat } = setupPlugin();
+    const { pending } = awaitFeedback(socket);
+    aibitat.abortController.abort();
+    aibitat.emitter.emit("abort");
+    await expect(pending).resolves.toEqual({
+      feedback: "exit",
+      attachments: [],
+    });
+    expect(socket.handleFeedback).toBeUndefined();
+    expect(jest.getTimerCount()).toBe(0);
+    expect(aibitat.emitter.listenerCount("abort")).toBe(0);
+  });
+
+  it("does not start a feedback timeout for a connection already cancelled", async () => {
+    const { socket, aibitat } = setupPlugin();
+    aibitat.abortController.abort();
+    const { pending } = awaitFeedback(socket);
+    await expect(pending).resolves.toEqual({
+      feedback: "exit",
+      attachments: [],
+    });
+    expect(jest.getTimerCount()).toBe(0);
+  });
+
+  it("settles a clarification card and clears its timers on disconnect", async () => {
+    const { socket, aibitat } = setupPlugin();
+    const pending = aibitat.requestUserClarification({
+      questions: [{ question: "Choose a format" }],
+    });
+    expect(socket.handleClarificationResponse).toEqual(expect.any(Function));
+    aibitat.abortController.abort();
+    aibitat.emitter.emit("abort");
+    await expect(pending).resolves.toEqual({
+      skipped: true,
+      timedOut: false,
+      answers: [{ skipped: true, answer: null }],
+    });
+    expect(socket.handleClarificationResponse).toBeUndefined();
+    expect(jest.getTimerCount()).toBe(0);
+    expect(aibitat.emitter.listenerCount("abort")).toBe(0);
+  });
 });
 
 describe("websocket plugin handleToolToggle", () => {
+  it("rejects a disabled or revoked execution identity without applying a tool change", async () => {
+    const { loadExecutionContext } = require("../../../../../enterprise/execution-context");
+    loadExecutionContext.mockRejectedValueOnce(new Error("disabled"));
+    const { socket, aibitat } = setupPlugin();
+    expect(socket.handleToolToggle(JSON.stringify({ type: "agentToolToggle", skill: "web-browsing", enabled: false }))).toBe(true);
+    await flushPromises();
+    expect(aibitat.toggleAgentTool).not.toHaveBeenCalled();
+  });
   it.each(MALFORMED_TEXT_FRAMES)("does not claim %j", (frame) => {
     const { socket, aibitat } = setupPlugin();
 

@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const lancedb = require("@lancedb/lancedb");
 const { toChunks, getEmbeddingEngineSelection } = require("../../helpers");
 const { TextSplitter } = require("../../TextSplitter");
@@ -15,16 +16,22 @@ const path = require("path");
  */
 
 class LanceDb extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, this, this);
+  }
+
   /** @type {import('@lancedb/lancedb').Connection|null} */
-  static #connection = null;
+  static #connections = new Map();
 
   constructor() {
     super();
   }
 
   get uri() {
-    const basePath = !!process.env.STORAGE_DIR
-      ? process.env.STORAGE_DIR
+    if (env.LANCE_DB_PATH) return path.resolve(env.LANCE_DB_PATH);
+    const basePath = !!env.STORAGE_DIR
+      ? env.STORAGE_DIR
       : path.resolve(__dirname, "../../../storage");
     return path.resolve(basePath, "lancedb");
   }
@@ -35,9 +42,15 @@ class LanceDb extends VectorDatabase {
 
   /** @returns {Promise<{client: LanceClient}>} */
   async connect() {
-    if (!LanceDb.#connection)
-      LanceDb.#connection = await lancedb.connect(this.uri);
-    return { client: LanceDb.#connection };
+    const uri = this.uri;
+    if (!LanceDb.#connections.has(uri)) {
+      const connection = lancedb.connect(uri).catch((error) => {
+        LanceDb.#connections.delete(uri);
+        throw error;
+      });
+      LanceDb.#connections.set(uri, connection);
+    }
+    return { client: await LanceDb.#connections.get(uri) };
   }
 
   /**
@@ -246,7 +259,30 @@ class LanceDb extends VectorDatabase {
    * @param {string} namespace
    * @returns
    */
-  async updateOrCreateCollection(client, data = [], namespace) {
+  async updateOrCreateCollection(
+    client,
+    data = [],
+    namespace,
+    { upsert = false } = {}
+  ) {
+    if (upsert) {
+      let collection = await client.openTable(namespace).catch(() => null);
+      if (!collection) {
+        try {
+          await client.createTable(namespace, data);
+          return true;
+        } catch (error) {
+          collection = await client.openTable(namespace).catch(() => null);
+          if (!collection) throw error;
+        }
+      }
+      await collection
+        .mergeInsert("id")
+        .whenMatchedUpdateAll()
+        .whenNotMatchedInsertAll()
+        .execute(data);
+      return true;
+    }
     const hasNamespace = await this.hasNamespace(namespace);
     if (hasNamespace) {
       const collection = await client.openTable(namespace);
@@ -492,7 +528,7 @@ class LanceDb extends VectorDatabase {
 
   async reset() {
     const { client } = await this.connect();
-    LanceDb.#connection = null;
+    LanceDb.#connections.delete(this.uri);
     const fs = require("fs");
     fs.rm(`${client.uri}`, { recursive: true }, () => null);
     return { reset: true };

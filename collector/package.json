@@ -13,7 +13,8 @@
     "dev": "cross-env NODE_ENV=development nodemon --ignore hotdir --ignore storage --trace-warnings index.js",
     "start": "cross-env NODE_ENV=production node index.js",
     "lint": "eslint --fix .",
-    "lint:check": "eslint ."
+    "lint:check": "eslint .",
+    "test": "node --test tests/*.test.cjs && node ../node_modules/jest/bin/jest.js --config jest.config.cjs --runInBand"
   },
   "dependencies": {
     "@langchain/community": "^0.2.23",

@@ -1,8 +1,25 @@
 const { reqBody } = require("../../utils/http");
-const {
-  isSingleUserMode,
-} = require("../../utils/middleware/multiUserProtected");
+const { requireTenantConfiguration } = require("../../enterprise/settings");
 const { validatedRequest } = require("../../utils/middleware/validatedRequest");
+const jwt = require("jsonwebtoken");
+const { randomUUID } = require("crypto");
+const { SystemSettings } = require("../../models/systemSettings");
+const prisma = require("../../utils/prisma");
+
+async function outlookCallbackIdentity(request,response,next) {
+  try {
+    await require("../../enterprise/domains").requirePlatformSite(request);
+    const claims = jwt.verify(request.query.state,process.env.JWT_SECRET,{audience:"outlook-enterprise-configuration",algorithms:["HS256"]});
+    const actor = await require("../../enterprise/auth").platformContext(claims.sub);
+    if (actor.authVersion !== claims.ver || typeof claims.tenantId !== "string") throw new Error();
+    if (!await prisma.ep_tenants.findFirst({where:{id:claims.tenantId,status:"active"},select:{id:true}})) throw new Error();
+    const used = await prisma.cache_data.deleteMany({where:{name:`outlook-oauth:${claims.jti}`,expiresAt:{gt:new Date()}}});
+    if (used.count !== 1) throw new Error();
+    request.ep = actor;
+    request.configurationTenantId = claims.tenantId;
+    return SystemSettings.withTenantConfiguration(claims.tenantId,next);
+  } catch { response.status(401).send("授权已失效，请从企业连接配置重新发起授权。"); }
+}
 
 /**
  * Constructs the OAuth redirect URI from the request headers.
@@ -11,7 +28,7 @@ const { validatedRequest } = require("../../utils/middleware/validatedRequest");
  */
 function getOutlookRedirectUri(request) {
   const protocol = request.headers["x-forwarded-proto"] || request.protocol;
-  const host = request.headers["x-forwarded-host"] || request.get("host");
+  const host = request.get("host");
   return `${protocol}://${host}/api/agent-skills/outlook/auth-callback`;
 }
 
@@ -20,7 +37,7 @@ function outlookAgentEndpoints(app) {
 
   app.post(
     "/admin/agent-skills/outlook/auth-url",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, requireTenantConfiguration],
     async (request, response) => {
       try {
         const { clientId, tenantId, clientSecret, authType } = reqBody(request);
@@ -77,8 +94,13 @@ function outlookAgentEndpoints(app) {
             .status(400)
             .json({ success: false, error: result.error });
         }
-
-        return response.status(200).json({ success: true, url: result.url });
+        const configurationTenantId = SystemSettings.tenantConfigurationId();
+        const nonce = randomUUID();
+        await prisma.cache_data.create({data:{name:`outlook-oauth:${nonce}`,data:"outlook",expiresAt:new Date(Date.now()+10*60*1000)}});
+        const state = jwt.sign({tenantId:configurationTenantId,ver:request.ep.authVersion},process.env.JWT_SECRET,{subject:request.ep.userId,jwtid:nonce,audience:"outlook-enterprise-configuration",expiresIn:"10m",algorithm:"HS256"});
+        const url = new URL(result.url);
+        url.searchParams.set("state",state);
+        return response.status(200).json({ success: true, url: url.toString() });
       } catch (e) {
         console.error("Outlook auth URL error:", e);
         response.status(500).json({ success: false, error: e.message });
@@ -88,7 +110,7 @@ function outlookAgentEndpoints(app) {
 
   app.get(
     "/agent-skills/outlook/auth-callback",
-    [validatedRequest, isSingleUserMode],
+    [outlookCallbackIdentity],
     async (request, response) => {
       try {
         const { code, error, error_description } = request.query;
@@ -120,7 +142,7 @@ function outlookAgentEndpoints(app) {
         }
 
         return response.redirect(
-          `${frontendUrl}/settings/agents?outlook_auth=success`
+          `${frontendUrl}/settings/agents?tenantId=${encodeURIComponent(request.configurationTenantId)}&outlook_auth=success`
         );
       } catch (e) {
         console.error("Outlook OAuth callback error:", e);
@@ -133,7 +155,7 @@ function outlookAgentEndpoints(app) {
 
   app.get(
     "/admin/agent-skills/outlook/status",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, requireTenantConfiguration],
     async (_request, response) => {
       try {
         const outlookLib = require("../../utils/agents/aibitat/plugins/outlook/lib");
@@ -171,7 +193,7 @@ function outlookAgentEndpoints(app) {
 
   app.post(
     "/admin/agent-skills/outlook/revoke",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, requireTenantConfiguration],
     async (_request, response) => {
       try {
         const outlookLib = require("../../utils/agents/aibitat/plugins/outlook/lib");

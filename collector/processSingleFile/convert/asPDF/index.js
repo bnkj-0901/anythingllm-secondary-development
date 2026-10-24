@@ -32,6 +32,12 @@ async function asPdf({
     }).ocrPDF(fullFilePath);
   }
 
+  // Preserve page references for the tenant API without publishing a global
+  // parsed document. The original extraction and OCR selection stay intact.
+  if (options.returnDocuments === true) {
+    return { success: true, reason: null, documents: docs };
+  }
+
   for (const doc of docs) {
     console.log(
       `-- Parsing content from pg ${

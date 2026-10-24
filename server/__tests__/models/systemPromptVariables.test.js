@@ -1,193 +1,202 @@
+jest.mock("../../utils/prisma", () => ({
+  system_prompt_variables: { findMany: jest.fn() },
+  users: { findFirst: jest.fn() },
+}));
+
 const { SystemPromptVariables } = require("../../models/systemPromptVariables");
 const prisma = require("../../utils/prisma");
-
 const mockUser = {
-  id: 1,
+  id: "196142dd-28d7-40e2-9248-3f74ab6104bb",
+  tenantId: "tenant-a",
   username: "john.doe",
-  bio: "I am a test user",
+  name: "John Doe",
+  bio: "Tenant A profile",
 };
-
-const mockWorkspace = {
+const scope = { tenantId: mockUser.tenantId };
+const mockStaticVariable = {
   id: 1,
-  name: "Test Workspace",
-  slug: 'test-workspace',
+  key: "mystaticvariable",
+  value: "AnythingLLM testing runtime",
+  description: "A test variable",
+  type: "static",
 };
+const expand = (prompt, options = scope) =>
+  SystemPromptVariables.expandSystemPromptVariables(
+    prompt,
+    mockUser.id,
+    options
+  );
 
-const mockSystemPromptVariables = [
-  {
-    id: 1,
-    key: "mystaticvariable",
-    value: "AnythingLLM testing runtime",
-    description: "A test variable",
-    type: "static",
-    userId: null,
-  },
-];
+beforeEach(() => {
+  jest.clearAllMocks();
+  prisma.system_prompt_variables.findMany.mockResolvedValue([
+    mockStaticVariable,
+  ]);
+  prisma.users.findFirst.mockResolvedValue(mockUser);
+});
 
-describe("SystemPromptVariables.expandSystemPromptVariables", () => {
-  beforeEach(() => {
-    jest.clearAllMocks();
-    // Mock just the Prisma actions since that is what is used by default values
-    prisma.system_prompt_variables.findMany = jest.fn().mockResolvedValue(mockSystemPromptVariables);
-    prisma.workspaces.findUnique = jest.fn().mockResolvedValue(mockWorkspace);
-    prisma.users.findUnique = jest.fn().mockResolvedValue(mockUser);
+test("expands original static and date variables with current tenant user fields", async () => {
+  const result = await expand(
+    "{mystaticvariable} | {user.name} ({user.id}) | {datetime}"
+  );
+  expect(result).toContain(
+    `${mockStaticVariable.value} | john.doe (${mockUser.id}) | `
+  );
+  expect(result).not.toContain("{datetime}");
+  expect(prisma.users.findFirst).toHaveBeenCalledWith({
+    where: { id: mockUser.id, tenantId: mockUser.tenantId },
+    select: { username: true },
   });
+});
 
-  it("should expand user-defined system prompt variables", async () => {
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Hello {mystaticvariable}");
-    expect(variables).toBe(`Hello ${mockSystemPromptVariables[0].value}`);
-  });
+test("UUID lookup stays inside its tenant and retains the original username meaning", async () => {
+  prisma.users.findFirst.mockImplementation(async ({ where }) =>
+    where.tenantId === mockUser.tenantId ? mockUser : null
+  );
+  expect(await expand("{user.name}")).toBe(mockUser.username);
+  expect(await expand("{user.name}", { tenantId: "tenant-b" })).toBe(
+    "[User name is empty or unknown]"
+  );
+});
 
-  it("should expand the datetime system prompt variable", async () => {
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Current datetime: {datetime}");
-    expect(variables).toContain("Current datetime: ");
-    expect(variables).not.toContain("{datetime}");
-  });
-
-  it("should expand workspace-defined system prompt variables", async () => {
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Hello {workspace.name}", null, mockWorkspace.id);
-    expect(variables).toBe(`Hello ${mockWorkspace.name}`);
-  });
-
-  it("should expand user-defined system prompt variables", async () => {
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Hello {user.name}", mockUser.id);
-    expect(variables).toBe(`Hello ${mockUser.username}`);
-  });
-
-  it("should work with any combination of variables", async () => {
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Hello {mystaticvariable} {workspace.name} {user.name}", mockUser.id, mockWorkspace.id);
-    expect(variables).toBe(`Hello ${mockSystemPromptVariables[0].value} ${mockWorkspace.name} ${mockUser.username}`);
-  });
-
-  it('should fail gracefully with invalid variables that are undefined for any reason', async () => {
-    // Undefined sub-fields on valid classes are push to a placeholder [Class prop]. This is expected behavior.
-    const variables = await SystemPromptVariables.expandSystemPromptVariables("Hello {invalid.variable} {user.password} the current user is {user.name} on workspace id #{workspace.id}", null, null);
-    expect(variables).toBe("Hello {invalid.variable} [User password] the current user is [User name] on workspace id #[Workspace ID]");
-  });
-
-  it("preserves $$ and $& in static variable values (String.replace specials)", async () => {
-    prisma.system_prompt_variables.findMany = jest.fn().mockResolvedValue([
-      {
-        id: 2,
-        key: "dollars",
-        value: "cost is $$5 and matched $& here",
-        description: "dollar specials",
-        type: "static",
-        userId: null,
-      },
-    ]);
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "Invoice {dollars}"
-    );
-    expect(out).toBe("Invoice cost is $$5 and matched $& here");
-  });
-
-  it("preserves $` and $' in static variable values", async () => {
-    prisma.system_prompt_variables.findMany = jest.fn().mockResolvedValue([
-      {
-        id: 3,
-        key: "ticks",
-        value: "before $` after $'",
-        description: "tick specials",
-        type: "static",
-        userId: null,
-      },
-    ]);
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "X {ticks} Y"
-    );
-    expect(out).toBe("X before $` after $' Y");
-  });
-
-  it("preserves $ specials in default user and workspace variable values", async () => {
-    prisma.users.findUnique = jest.fn().mockResolvedValue({
-      ...mockUser,
-      username: "$&john",
-      bio: "I charge $$50/hr, $` and $' included",
-    });
-    prisma.workspaces.findUnique = jest.fn().mockResolvedValue({
-      ...mockWorkspace,
-      name: "Team $& Co",
-    });
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{user.name} | {user.bio} | {workspace.name}",
+test.each([undefined, null, {}, 123])(
+  "missing tenant scope %p never looks up global user data",
+  async (options) => {
+    const result = await SystemPromptVariables.expandSystemPromptVariables(
+      "{user.name} | {mystaticvariable}",
       mockUser.id,
-      mockWorkspace.id
+      options
     );
-    expect(out).toBe(
-      "$&john | I charge $$50/hr, $` and $' included | Team $& Co"
-    );
-  });
+    expect(result).toBe(`[User name] | ${mockStaticVariable.value}`);
+    expect(prisma.users.findFirst).not.toHaveBeenCalled();
+  }
+);
 
-  it("does not expand placeholders inside inserted user values", async () => {
-    prisma.users.findUnique = jest.fn().mockResolvedValue({
-      ...mockUser,
-      bio: "see {workspace.name}",
-    });
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{user.bio} | in {workspace.name}",
-      mockUser.id,
-      mockWorkspace.id
-    );
-    expect(out).toBe(`see {workspace.name} | in ${mockWorkspace.name}`);
+test("Workspace variables are absent while the original bio resolves only inside its tenant", async () => {
+  expect(SystemPromptVariables.VALID_TYPES).not.toContain("workspace");
+  const variables = await SystemPromptVariables.getAll(mockUser.id);
+  expect(variables.map((variable) => variable.key)).not.toEqual(
+    expect.arrayContaining(["workspace.id", "workspace.name"])
+  );
+  expect(await expand("{workspace.id} | {workspace.name} | {user.bio}")).toBe(
+    "{workspace.id} | {workspace.name} | Tenant A profile"
+  );
+  expect(prisma.users.findFirst).toHaveBeenCalledWith({
+    where: { id: mockUser.id, tenantId: mockUser.tenantId },
+    select: { bio: true },
   });
+  prisma.users.findFirst.mockResolvedValueOnce(null);
+  expect(await expand("{user.bio}", { tenantId: "tenant-b" })).toBe(
+    "[User bio is empty]"
+  );
+  prisma.users.findFirst.mockClear();
+  expect(await expand("{user.bio}", {})).toBe("[User bio]");
+  expect(prisma.users.findFirst).not.toHaveBeenCalled();
+});
 
-  it("does not expand placeholders inside inserted static values", async () => {
-    prisma.system_prompt_variables.findMany = jest.fn().mockResolvedValue([
-      {
-        id: 4,
-        key: "greeting",
-        value: "Hi {user.name}",
-        description: "nested placeholder",
-        type: "static",
-        userId: null,
-      },
+test("unknown fields preserve the original placeholders and static variables still work without a user", async () => {
+  expect(
+    await SystemPromptVariables.expandSystemPromptVariables(
+      "{invalid.variable} {user.password} {user.name} {user.id} {mystaticvariable}"
+    )
+  ).toBe(
+    `{invalid.variable} [User password] [User name] [User id] ${mockStaticVariable.value}`
+  );
+});
+
+test.each(["cost is $$5 and matched $& here", "before $` after $'"])(
+  "preserves String.replace special characters in static values: %s",
+  async (value) => {
+    prisma.system_prompt_variables.findMany.mockResolvedValue([
+      { ...mockStaticVariable, value },
     ]);
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{greeting} | {user.name}",
-      mockUser.id
-    );
-    expect(out).toBe(`Hi {user.name} | ${mockUser.username}`);
-  });
+    expect(await expand("X {mystaticvariable} Y")).toBe(`X ${value} Y`);
+  }
+);
 
-  it("expands the same placeholder used more than once", async () => {
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{user.name} and {user.name} in {workspace.name}",
-      mockUser.id,
-      mockWorkspace.id
-    );
-    expect(out).toBe(
-      `${mockUser.username} and ${mockUser.username} in ${mockWorkspace.name}`
-    );
-    expect(prisma.users.findUnique).toHaveBeenCalledTimes(1);
+test("preserves dollar replacement specials in usernames", async () => {
+  prisma.users.findFirst.mockResolvedValue({
+    ...mockUser,
+    username: "$$ $& $` $' John",
   });
+  expect(await expand("{user.name}")).toBe("$$ $& $` $' John");
+});
 
-  it("does not expand a user value that references its own placeholder", async () => {
-    prisma.users.findUnique = jest.fn().mockResolvedValue({
-      ...mockUser,
-      bio: "x{user.bio}",
-    });
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{user.bio} {user.bio}",
-      mockUser.id
-    );
-    expect(out).toBe("x{user.bio} x{user.bio}");
+test("does not expand placeholders inside inserted user values", async () => {
+  prisma.users.findFirst.mockResolvedValue({
+    ...mockUser,
+    username: "see {mystaticvariable}",
   });
+  expect(await expand("{user.name} | {mystaticvariable}")).toBe(
+    `see {mystaticvariable} | ${mockStaticVariable.value}`
+  );
+});
 
-  it("leaves unknown placeholders inside inserted static values as-is", async () => {
-    prisma.system_prompt_variables.findMany = jest.fn().mockResolvedValue([
-      {
-        id: 5,
-        key: "wrapper",
-        value: "{unknownvariable}",
-        description: "unknown nested placeholder",
-        type: "static",
-        userId: null,
-      },
-    ]);
-    const out = await SystemPromptVariables.expandSystemPromptVariables(
-      "{wrapper} {unknownvariable}"
-    );
-    expect(out).toBe("{unknownvariable} {unknownvariable}");
+test("does not expand placeholders inside inserted static values", async () => {
+  prisma.system_prompt_variables.findMany.mockResolvedValue([
+    { ...mockStaticVariable, value: "Hi {user.name}" },
+  ]);
+  expect(await expand("{mystaticvariable} | {user.name}")).toBe(
+    "Hi {user.name} | john.doe"
+  );
+});
+
+test("resolves each repeated dynamic placeholder once", async () => {
+  expect(await expand("{user.name} and {user.name}")).toBe(
+    "john.doe and john.doe"
+  );
+  expect(prisma.users.findFirst).toHaveBeenCalledTimes(1);
+});
+
+test("self-references and unknown nested static placeholders do not recurse", async () => {
+  prisma.users.findFirst.mockResolvedValue({
+    ...mockUser,
+    username: "x{user.name}",
   });
+  prisma.system_prompt_variables.findMany.mockResolvedValue([
+    { ...mockStaticVariable, value: "{unknownvariable}" },
+  ]);
+  expect(
+    await expand("{user.name} {user.name} {mystaticvariable} {unknownvariable}")
+  ).toBe("x{user.name} x{user.name} {unknownvariable} {unknownvariable}");
+});
+
+test("injected database delegates resolve static and user values together", async () => {
+  const db = {
+    system_prompt_variables: {
+      findMany: jest.fn(async () => [
+        { ...mockStaticVariable, value: "Scoped" },
+      ]),
+    },
+    users: { findFirst: jest.fn(async () => ({ username: "scoped.user" })) },
+  };
+  expect(
+    await expand("{mystaticvariable}: {user.name}", { ...scope, db })
+  ).toBe("Scoped: scoped.user");
+  expect(prisma.users.findFirst).not.toHaveBeenCalled();
+  expect(prisma.system_prompt_variables.findMany).not.toHaveBeenCalled();
+});
+
+test("failed user lookup returns the original safe placeholder", async () => {
+  prisma.users.findFirst.mockRejectedValueOnce(new Error("offline"));
+  const log = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await expand("{user.name}")).toBe("[User name is empty or unknown]");
+  } finally {
+    log.mockRestore();
+  }
+});
+
+test("empty prompts and missing database metadata retain the original prompt contract", async () => {
+  expect(await expand("")).toBe("");
+  expect(await expand(null)).toBeNull();
+  prisma.system_prompt_variables.findMany.mockRejectedValueOnce(
+    new Error("offline")
+  );
+  const log = jest.spyOn(console, "error").mockImplementation(() => {});
+  try {
+    expect(await expand("{user.name}")).toBe("{user.name}");
+  } finally {
+    log.mockRestore();
+  }
 });

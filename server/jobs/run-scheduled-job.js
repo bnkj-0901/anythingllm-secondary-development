@@ -44,6 +44,10 @@ process.on("message", async (payload) => {
     // Transition queued -> running. If this returns false, the row was
     // already moved to a terminal state (e.g. parent failed it because it
     // thought the worker had died). Bail out without touching it further.
+    const { context } = require("../enterprise/auth");
+    const ctx = await context(job.userId);
+    if (ctx.tenantId !== job.tenantId)
+      throw new Error("Task execution identity is invalid");
     const transitioned = await ScheduledJobRun.markRunning(runId);
     if (!transitioned) {
       log(
@@ -56,77 +60,88 @@ process.on("message", async (payload) => {
       `Starting scheduled job: "${job.name}" (id=${job.id}) with timeout ${SCHEDULED_JOB_TIMEOUT_MS}ms`
     );
     await ScheduledJob.updateRunTimestamps(job.id);
-    const { handler, thoughts, toolCalls, state } = agentActionCb();
+    const { runExecution } = require("../enterprise/execution-context");
+    await runExecution(ctx, async () => {
+      const { handler, thoughts, toolCalls, state } = agentActionCb();
 
-    const { EphemeralAgentHandler } = require("../utils/agents/ephemeral.js");
-    const agentHandler = await new EphemeralAgentHandler({
-      uuid: uuidv4(),
-      prompt: job.prompt,
-    }).init();
+      const { EphemeralAgentHandler } = require("../utils/agents/ephemeral.js");
+      const agentHandler = await new EphemeralAgentHandler({
+        uuid: uuidv4(),
+        prompt: job.prompt,
+        ctx,
+        userId: ctx.userId,
+      }).init();
 
-    // Tool overrides control which tools the agent can use:
-    // - Array with items: only those specific tools are loaded
-    // - Empty array: no tools are loaded
-    const toolOverrides = safeJsonParse(job.tools, []);
-    await agentHandler.createAIbitat({
-      handler,
-      toolOverrides,
-    });
+      // Tool overrides control which tools the agent can use:
+      // - Array with items: only those specific tools are loaded
+      // - Empty array: no tools are loaded
+      const toolOverrides = safeJsonParse(job.tools, []);
+      await agentHandler.createAIbitat({
+        handler,
+        toolOverrides,
+      });
 
-    // Auto-approve all tool invocations when running a scheduled job
-    agentHandler.aibitat.requestToolApproval = async () => {
-      log("Tool approval requested for scheduled job, auto-approving");
-      return {
-        approved: true,
-        message: "Auto-approved by scheduled job runner.",
+      // Auto-approve all tool invocations when running a scheduled job
+      agentHandler.aibitat.requestToolApproval = async () => {
+        log("Tool approval requested for scheduled job, auto-approving");
+        return {
+          approved: true,
+          message: "Auto-approved by scheduled job runner.",
+        };
       };
-    };
 
-    // Capture tool results for the execution trace
-    agentHandler.aibitat.onToolCallResult(
-      ({ toolName, arguments: args, result }) => {
-        toolCalls.push({
-          toolName,
-          arguments: args,
-          result,
-          timestamp: Date.now(),
-        });
-      }
-    );
+      // Capture tool results for the execution trace
+      agentHandler.aibitat.onToolCallResult(
+        ({ toolName, arguments: args, result }) => {
+          toolCalls.push({
+            toolName,
+            arguments: args,
+            result,
+            timestamp: Date.now(),
+          });
+        }
+      );
 
-    const startTime = Date.now();
-    await Promise.race([
-      agentHandler.startAgentCluster(),
-      new Promise((_, reject) => {
-        timeoutId = setTimeout(
-          () => reject(new Error("SCHEDULED_JOB_TIMEOUT")),
-          SCHEDULED_JOB_TIMEOUT_MS
-        );
-      }),
-    ]).finally(() => {
-      if (!timeoutId) return;
-      clearTimeout(timeoutId);
-      timeoutId = null;
+      const startTime = Date.now();
+      await Promise.race([
+        agentHandler.startAgentCluster(),
+        new Promise((_, reject) => {
+          timeoutId = setTimeout(
+            () => reject(new Error("SCHEDULED_JOB_TIMEOUT")),
+            SCHEDULED_JOB_TIMEOUT_MS
+          );
+        }),
+      ]).finally(() => {
+        if (!timeoutId) return;
+        clearTimeout(timeoutId);
+        timeoutId = null;
+      });
+      const duration = Date.now() - startTime;
+
+      // Get outputs from aibitat which include proper type info (e.g., PptxFileDownload, ExcelFileDownload)
+      // for correct re-rendering when porting to workspace chat
+      const outputs = agentHandler.getPendingOutputs();
+
+      status = "success";
+      const latest = await context(job.userId);
+      if (
+        latest.tenantId !== job.tenantId ||
+        latest.authVersion !== ctx.authVersion
+      )
+        throw new Error("Task execution identity changed");
+      await ScheduledJobRun.complete(runId, {
+        result: {
+          text: state.textResponse,
+          thoughts,
+          toolCalls,
+          outputs,
+          metrics: state.metrics,
+          duration,
+        },
+      });
+      log(`Scheduled job "${job.name}" completed in ${duration}ms)`);
+      await sendWebPushNotification(job, runId, state.textResponse, log);
     });
-    const duration = Date.now() - startTime;
-
-    // Get outputs from aibitat which include proper type info (e.g., PptxFileDownload, ExcelFileDownload)
-    // for correct re-rendering when porting to workspace chat
-    const outputs = agentHandler.getPendingOutputs();
-
-    status = "success";
-    await ScheduledJobRun.complete(runId, {
-      result: {
-        text: state.textResponse,
-        thoughts,
-        toolCalls,
-        outputs,
-        metrics: state.metrics,
-        duration,
-      },
-    });
-    log(`Scheduled job "${job.name}" completed in ${duration}ms)`);
-    await sendWebPushNotification(job, runId, state.textResponse, log);
   } catch (error) {
     if (error.message === "SCHEDULED_JOB_TIMEOUT") {
       status = "timed_out";

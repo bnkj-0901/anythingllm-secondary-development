@@ -1,4 +1,8 @@
 const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
+const {
   toChunks,
   maximumChunkLength,
   reportEmbeddingProgress,
@@ -6,18 +10,20 @@ const {
 
 class LocalAiEmbedder {
   constructor() {
-    if (!process.env.EMBEDDING_BASE_PATH)
+    if (!env.EMBEDDING_BASE_PATH)
       throw new Error("No embedding base path was set.");
-    if (!process.env.EMBEDDING_MODEL_PREF)
+    if (!env.EMBEDDING_MODEL_PREF)
       throw new Error("No embedding model was set.");
 
     this.className = "LocalAiEmbedder";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.model = process.env.EMBEDDING_MODEL_PREF;
-    this.openai = new OpenAIApi({
-      baseURL: process.env.EMBEDDING_BASE_PATH,
-      apiKey: process.env.LOCAL_AI_API_KEY ?? null,
-    });
+    this.model = env.EMBEDDING_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: env.EMBEDDING_BASE_PATH,
+        apiKey: env.LOCAL_AI_API_KEY ?? null,
+      })
+    );
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 50;
@@ -37,11 +43,11 @@ class LocalAiEmbedder {
 
   get outputDimensions() {
     if (
-      process.env.EMBEDDING_OUTPUT_DIMENSIONS &&
-      !isNaN(process.env.EMBEDDING_OUTPUT_DIMENSIONS) &&
-      process.env.EMBEDDING_OUTPUT_DIMENSIONS > 0
+      env.EMBEDDING_OUTPUT_DIMENSIONS &&
+      !isNaN(env.EMBEDDING_OUTPUT_DIMENSIONS) &&
+      env.EMBEDDING_OUTPUT_DIMENSIONS > 0
     )
-      return parseInt(process.env.EMBEDDING_OUTPUT_DIMENSIONS);
+      return parseInt(env.EMBEDDING_OUTPUT_DIMENSIONS);
     return null;
   }
 

@@ -5,8 +5,7 @@ import System from "@/models/system";
 import Memory from "@/models/memory";
 
 export const LIMITS = {
-  workspace: 20,
-  global: 5,
+  personal: 20,
 };
 
 const MemoriesContext = createContext(null);
@@ -19,13 +18,12 @@ export function useMemoriesContext() {
   return ctx;
 }
 
-export function MemoriesProvider({ workspace, children }) {
+export function MemoriesProvider({ children }) {
   const { sidebarOpen, closeSidebar } = useMemoriesSidebar();
   const { user } = useUser();
-  const canToggle = !user || user?.role === "admin";
+  const canToggle = user?.identity === "platform";
 
-  const [memories, setMemories] = useState({ global: [], workspace: [] });
-  const [activeTab, setActiveTab] = useState("workspace");
+  const [memories, setMemories] = useState([]);
   const [modalState, setModalState] = useState({ open: false, mode: "create" });
   const [editingMemory, setEditingMemory] = useState(null);
   const [enabled, setEnabled] = useState(false);
@@ -42,20 +40,16 @@ export function MemoriesProvider({ workspace, children }) {
   }, [sidebarOpen]);
 
   async function fetchMemories() {
-    if (!workspace?.slug) return;
-    const data = await Memory.forWorkspace(workspace.slug);
+    const data = await Memory.forUser();
     setMemories(data);
   }
 
   useEffect(() => {
     if (sidebarOpen && enabled) fetchMemories();
-  }, [sidebarOpen, workspace?.slug, enabled]);
+  }, [sidebarOpen, enabled]);
 
   async function handleCreate(content) {
-    const { memory } = await Memory.create(workspace.slug, {
-      content,
-      scope: activeTab,
-    });
+    const { memory } = await Memory.create({ content });
     if (memory) fetchMemories();
   }
 
@@ -66,17 +60,6 @@ export function MemoriesProvider({ workspace, children }) {
 
   async function handleUpdate(memoryId, content) {
     const { memory } = await Memory.update(memoryId, { content });
-    if (memory) fetchMemories();
-  }
-
-  async function handlePromote(memoryId) {
-    const { memory } = await Memory.promoteToGlobal(memoryId);
-    if (memory) fetchMemories();
-  }
-
-  async function handleDemote(memoryId) {
-    if (!workspace?.slug) return;
-    const { memory } = await Memory.demoteToWorkspace(memoryId, workspace.slug);
     if (memory) fetchMemories();
   }
 
@@ -95,17 +78,13 @@ export function MemoriesProvider({ workspace, children }) {
     setEditingMemory(null);
   }
 
-  const activeMemories =
-    activeTab === "workspace" ? memories.workspace : memories.global;
+  const activeMemories = memories;
 
   const value = {
-    workspace,
     sidebarOpen,
     closeSidebar,
     canToggle,
     memories,
-    activeTab,
-    setActiveTab,
     activeMemories,
     enabled,
     setEnabled,
@@ -120,8 +99,6 @@ export function MemoriesProvider({ workspace, children }) {
     handleCreate,
     handleDelete,
     handleUpdate,
-    handlePromote,
-    handleDemote,
   };
 
   return (

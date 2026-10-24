@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   formatChatHistory,
@@ -13,28 +17,26 @@ const {
 class AzureOpenAiLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI } = require("openai");
-    if (!process.env.AZURE_OPENAI_ENDPOINT)
+    if (!env.AZURE_OPENAI_ENDPOINT)
       throw new Error("No Azure API endpoint was set.");
-    if (!process.env.AZURE_OPENAI_KEY)
-      throw new Error("No Azure API key was set.");
+    if (!env.AZURE_OPENAI_KEY) throw new Error("No Azure API key was set.");
 
     this.className = "AzureOpenAiLLM";
-    this.openai = new OpenAI({
-      apiKey: process.env.AZURE_OPENAI_KEY,
-      baseURL: AzureOpenAiLLM.formatBaseUrl(process.env.AZURE_OPENAI_ENDPOINT),
-    });
+    this.openai = new OpenAI(
+      sdkOptions({
+        apiKey: env.AZURE_OPENAI_KEY,
+        baseURL: AzureOpenAiLLM.formatBaseUrl(env.AZURE_OPENAI_ENDPOINT),
+      })
+    );
     this.model =
-      modelPreference ||
-      process.env.AZURE_OPENAI_MODEL_PREF ||
-      process.env.OPEN_MODEL_PREF;
+      modelPreference || env.AZURE_OPENAI_MODEL_PREF || env.OPEN_MODEL_PREF;
     /* 
       Note: Azure OpenAI deployments do not expose model metadata that would allow us to
       programmatically detect whether the deployment uses a reasoning model (o1, o1-mini, o3-mini, etc.).
       As a result, we rely on the user to explicitly set AZURE_OPENAI_MODEL_TYPE="reasoning"
       when using reasoning models, as incorrect configuration might result in chat errors.
     */
-    this.isOTypeModel =
-      process.env.AZURE_OPENAI_MODEL_TYPE === "reasoning" || false;
+    this.isOTypeModel = env.AZURE_OPENAI_MODEL_TYPE === "reasoning" || false;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -73,7 +75,7 @@ class AzureOpenAiLLM {
    * @returns {boolean}
    */
   static modelSupportsTemperature() {
-    return process.env.AZURE_OPENAI_MODEL_TYPE !== "reasoning";
+    return env.AZURE_OPENAI_MODEL_TYPE !== "reasoning";
   }
 
   #log(text, ...args) {
@@ -97,8 +99,8 @@ class AzureOpenAiLLM {
   }
 
   static promptWindowLimit(_modelName) {
-    return !!process.env.AZURE_OPENAI_TOKEN_LIMIT
-      ? Number(process.env.AZURE_OPENAI_TOKEN_LIMIT)
+    return !!env.AZURE_OPENAI_TOKEN_LIMIT
+      ? Number(env.AZURE_OPENAI_TOKEN_LIMIT)
       : 4096;
   }
 
@@ -106,8 +108,8 @@ class AzureOpenAiLLM {
   // could be any of these https://learn.microsoft.com/en-us/azure/ai-services/openai/concepts/models#gpt-4-models
   // and if undefined - assume it is the lowest end.
   promptWindowLimit() {
-    return !!process.env.AZURE_OPENAI_TOKEN_LIMIT
-      ? Number(process.env.AZURE_OPENAI_TOKEN_LIMIT)
+    return !!env.AZURE_OPENAI_TOKEN_LIMIT
+      ? Number(env.AZURE_OPENAI_TOKEN_LIMIT)
       : 4096;
   }
 

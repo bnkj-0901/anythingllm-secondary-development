@@ -8,7 +8,7 @@ import { Info, Warning } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
 
 const DEFAULT_BRANCHES = ["main", "master"];
-export default function GithubOptions() {
+export default function GithubOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [repo, setRepo] = useState(null);
@@ -31,7 +31,9 @@ export default function GithubOptions() {
         "info",
         { clear: true, autoClose: false }
       );
-      const { data, error } = await System.dataConnectors.github.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.github.collect
+      )({
         repo: form.get("repo"),
         accessToken: form.get("accessToken"),
         branch: form.get("branch"),
@@ -40,6 +42,12 @@ export default function GithubOptions() {
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

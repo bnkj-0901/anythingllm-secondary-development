@@ -35,6 +35,7 @@ import { Link } from "react-router-dom";
 import paths from "@/utils/paths";
 import AgentFlows from "@/models/agentFlows";
 import AgentSkillSettings from "./AgentSkillSettings";
+import { api } from "@/models/platform";
 
 const IGNORE_CHANGE_SETTINGS = [
   "agentSkillRerankerEnabled",
@@ -43,6 +44,17 @@ const IGNORE_CHANGE_SETTINGS = [
   "agentClarifyingQuestionsEnabled",
   "agentClarifyingQuestionsMaxPerTurn",
 ];
+
+function TenantConnections() {
+  const [tenants, setTenants] = useState([]);
+  const current = new URLSearchParams(window.location.search).get("tenantId") || "";
+  useEffect(()=>{api("/platform/tenants").then(result=>setTenants(result.tenants || [])).catch(err=>showToast(err.message,"error"));},[]);
+  return <label className="mb-4 block text-sm text-theme-text-primary">企业连接配置
+    <select className="ml-3 rounded-lg bg-theme-settings-input-bg p-2" value={current} onChange={e=>{window.location.href=`/settings/agents${e.target.value ? `?tenantId=${encodeURIComponent(e.target.value)}` : ""}`;}}>
+      <option value="">共享工具定义</option>{tenants.map(tenant=><option key={tenant.id} value={tenant.id}>{tenant.name}</option>)}
+    </select>
+  </label>;
+}
 
 export default function AdminAgents() {
   const { t } = useTranslation();
@@ -83,7 +95,7 @@ export default function AdminAgents() {
   const isMultiUserMode = settings?.MultiUserMode ?? false;
   const filterSkillsByMode = ([_, skillConfig]) => {
     if (!skillConfig.mode) return true;
-    if (skillConfig.mode.includes("singleUserOnly") && isMultiUserMode)
+    if (skillConfig.mode.includes("singleUserOnly") && isMultiUserMode && !new URLSearchParams(window.location.search).get("tenantId"))
       return false;
     if (skillConfig.mode.includes("multiUserOnly") && !isMultiUserMode)
       return false;
@@ -359,6 +371,7 @@ export default function AdminAgents() {
           ref={formEl}
           className="flex flex-col w-full p-4 mt-10"
         >
+          <TenantConnections />
           <input
             name="system::default_agent_skills"
             type="hidden"
@@ -578,6 +591,7 @@ export default function AdminAgents() {
         ref={formEl}
         className="flex-1 flex gap-x-6 p-4 mt-10"
       >
+        <TenantConnections />
         <input
           name="system::default_agent_skills"
           type="hidden"

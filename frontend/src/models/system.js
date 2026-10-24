@@ -58,8 +58,11 @@ const System = {
       .then((res) => res.ok)
       .catch(() => false);
   },
-  keys: async function () {
-    return await fetch(`${API_BASE}/setup-complete`)
+  keys: async function (purpose = null) {
+    const query = purpose ? `?purpose=${encodeURIComponent(purpose)}` : "";
+    return await fetch(`${API_BASE}/setup-complete${query}`, {
+      headers: baseHeaders(),
+    })
       .then((res) => {
         if (!res.ok) throw new Error("Could not find setup information.");
         return res.json();
@@ -165,7 +168,7 @@ const System = {
       });
   },
   recoverAccount: async function (username, recoveryCodes) {
-    return await fetch(`${API_BASE}/system/recover-account`, {
+    return await fetch(`${API_BASE}/enterprise/recover-account`, {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({ username, recoveryCodes }),
@@ -183,7 +186,7 @@ const System = {
       });
   },
   resetPassword: async function (token, newPassword, confirmPassword) {
-    return await fetch(`${API_BASE}/system/reset-password`, {
+    return await fetch(`${API_BASE}/enterprise/reset-password`, {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({ token, newPassword, confirmPassword }),
@@ -301,7 +304,7 @@ const System = {
       });
   },
   uploadPfp: async function (formData) {
-    return await fetch(`${API_BASE}/system/upload-pfp`, {
+    return await fetch(`${API_BASE}/enterprise/me/avatar`, {
       method: "POST",
       body: formData,
       headers: baseHeaders(),
@@ -485,8 +488,8 @@ const System = {
         return { isCustomLogo: false, logoURL: null };
       });
   },
-  fetchPfp: async function (id) {
-    return await fetch(`${API_BASE}/system/pfp/${id}`, {
+  fetchPfp: async function () {
+    return await fetch(`${API_BASE}/enterprise/me/avatar`, {
       method: "GET",
       cache: "no-cache",
       headers: baseHeaders(),
@@ -501,7 +504,7 @@ const System = {
       });
   },
   removePfp: async function () {
-    return await fetch(`${API_BASE}/system/remove-pfp`, {
+    return await fetch(`${API_BASE}/enterprise/me/avatar`, {
       method: "DELETE",
       headers: baseHeaders(),
     })
@@ -609,6 +612,12 @@ const System = {
         provider,
         apiKey,
         basePath,
+        // Original provider controls share some field names between chat and
+        // embedding. Keep discovery in the configuration page's credential scope.
+        purpose:
+          window.location.pathname === "/settings/embedding-preference"
+            ? "embedding"
+            : "chat",
         options: options || {},
       }),
     })

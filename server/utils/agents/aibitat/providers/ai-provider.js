@@ -26,9 +26,6 @@ const { parseLMStudioBasePath } = require("../../../AiProviders/lmStudio");
 const { parseFoundryBasePath } = require("../../../AiProviders/foundry");
 const { parseOMLXBasePath } = require("../../../AiProviders/omlx");
 const { AzureOpenAiLLM } = require("../../../AiProviders/azureOpenAi");
-const {
-  SystemPromptVariables,
-} = require("../../../../models/systemPromptVariables");
 const { OllamaAILLM } = require("../../../AiProviders/ollama");
 const { LlmmanLLM } = require("../../../AiProviders/llmman");
 const { bindAbortSignal } = require("../../../helpers/abortSignals");
@@ -622,23 +619,36 @@ class Provider {
    * @param {string} [opts.prompt] - current user message, used for reranking injected memories
    * @returns {Promise<string>}
    */
-  static async systemPrompt({ workspace = null, user = null, prompt = "" }) {
+  static async systemPrompt({
+    workspace: configuration = null,
+    user: _user = null,
+    prompt = "",
+    ctx = null,
+  }) {
     const { SystemSettings } = require("../../../../models/systemSettings");
     const { promptWithMemories } = require("../../../memories");
-    const basePrompt =
-      workspace?.openAiPrompt ?? SystemSettings.saneDefaultSystemPrompt;
-    const systemPrompt =
-      await SystemPromptVariables.expandSystemPromptVariables(
+    const current =
+      ctx ||
+      require("../../../../enterprise/execution-context").executionContext();
+    let basePrompt =
+      configuration?.openAiPrompt ??
+      (current
+        ? await require("../../../../enterprise/settings").defaultPrompt(
+            current
+          )
+        : SystemSettings.saneDefaultSystemPrompt);
+    if (
+      configuration?.openAiPrompt !== null &&
+      configuration?.openAiPrompt !== undefined
+    )
+      basePrompt = await require("../../../../models/systemPromptVariables").SystemPromptVariables.expandSystemPromptVariables(
         basePrompt,
-        user?.id || null,
-        workspace?.id || null
+        current?.userId || null,
+        { tenantId: current?.tenantId }
       );
-    return promptWithMemories({
-      systemPrompt,
-      userId: user?.id ?? null,
-      workspaceId: workspace?.id,
-      prompt,
-    });
+    return current
+      ? promptWithMemories({ systemPrompt: basePrompt, ctx: current, prompt })
+      : basePrompt;
   }
 
   /**

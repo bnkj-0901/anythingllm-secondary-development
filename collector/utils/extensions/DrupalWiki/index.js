@@ -41,7 +41,11 @@ async function loadAndStoreSpaces(
   }
 
   console.log(`-- Working Drupal Wiki ${baseUrl} for spaceIds: ${spaceIds} --`);
-  const drupalWiki = new DrupalWiki({ baseUrl, accessToken });
+  const drupalWiki = new DrupalWiki({
+    baseUrl,
+    accessToken,
+    returnDocuments: response.locals.returnDocuments === true,
+  });
 
   const encryptionWorker = response.locals.encryptionWorker;
   const spaceIdsArr = spaceIds.split(",").map((idStr) => {
@@ -66,6 +70,9 @@ async function loadAndStoreSpaces(
   return {
     success: true,
     reason: null,
+    ...(response.locals.returnDocuments
+      ? { documents: drupalWiki.documents }
+      : {}),
     data: {
       spaceIds,
       destination: drupalWiki.storagePath,

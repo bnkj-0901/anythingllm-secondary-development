@@ -59,7 +59,7 @@ class GoogleCalendarBridge {
   async initialize() {
     try {
       const isMultiUser = await SystemSettings.isMultiUserMode();
-      if (isMultiUser) {
+      if (isMultiUser && !SystemSettings.hasTenantConfiguration()) {
         return {
           success: false,
           error:
@@ -102,7 +102,7 @@ class GoogleCalendarBridge {
    */
   static async isToolAvailable() {
     const isMultiUser = await SystemSettings.isMultiUserMode();
-    if (isMultiUser) return false;
+    if (isMultiUser && !SystemSettings.hasTenantConfiguration()) return false;
 
     const config = await GoogleCalendarBridge.getConfig();
     return !!(config.deploymentId && config.apiKey);
@@ -284,5 +284,5 @@ class GoogleCalendarBridge {
   }
 }
 
-module.exports = new GoogleCalendarBridge();
+module.exports = SystemSettings.tenantBridge(GoogleCalendarBridge);
 module.exports.GoogleCalendarBridge = GoogleCalendarBridge;

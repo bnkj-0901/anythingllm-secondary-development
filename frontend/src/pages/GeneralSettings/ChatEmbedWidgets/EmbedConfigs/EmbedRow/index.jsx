@@ -4,7 +4,6 @@ import showToast from "@/utils/toast";
 import { useModal } from "@/hooks/useModal";
 import Modal from "@/components/lib/Modal";
 import Embed from "@/models/embed";
-import paths from "@/utils/paths";
 import { nFormatter } from "@/utils/numbers";
 import EditEmbedModal from "./EditEmbedModal";
 import CodeSnippetModal from "./CodeSnippetModal";
@@ -72,12 +71,12 @@ export default function EmbedRow({ embed }) {
           className="px-6 whitespace-nowrap flex item-center gap-x-1"
         >
           <a
-            href={paths.workspace.chat(embed.workspace.slug)}
+            href={"/knowledge"}
             target="_blank"
             rel="noreferrer"
             className="text-white flex items-center hover:underline"
           >
-            {embed.workspace.name}
+            {embed.library.name}
           </a>
         </th>
         <th scope="row" className="px-6 whitespace-nowrap">

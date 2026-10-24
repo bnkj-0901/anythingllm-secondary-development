@@ -19,15 +19,20 @@ const WorkspaceAgentInvocation = {
     } catch {}
   },
 
-  new: async function ({ prompt, workspace, user = null, thread = null }) {
+  new: async function ({ prompt, ctx, threadId }) {
     try {
+      const { chatScope } = require("./workspaceChats");
+      const thread = await prisma.chat_threads.findFirst({
+        where: { id: threadId, ...chatScope(ctx) },
+      });
+      if (!thread) throw new Error("对话不存在或无权访问");
       const invocation = await prisma.workspace_agent_invocations.create({
         data: {
           uuid: uuidv4(),
-          workspace_id: workspace.id,
+          tenantId: ctx.tenantId,
           prompt: String(prompt),
-          user_id: user?.id,
-          thread_id: thread?.id,
+          user_id: ctx.userId,
+          thread_id: threadId,
         },
       });
 
@@ -51,13 +56,10 @@ const WorkspaceAgentInvocation = {
     }
   },
 
-  getWithWorkspace: async function (clause = {}) {
+  getWithContext: async function (clause = {}) {
     try {
       const invocation = await prisma.workspace_agent_invocations.findFirst({
         where: clause,
-        include: {
-          workspace: true,
-        },
       });
 
       return invocation || null;

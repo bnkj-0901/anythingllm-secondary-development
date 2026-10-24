@@ -4,8 +4,7 @@ const {
   editImageForWorkspace,
 } = require("../../../ImageGenerators");
 const { resolveImageBuffers } = require("../../../chats/commands/img");
-const { WorkspaceChats } = require("../../../../models/workspaceChats");
-const { safeJSONStringify } = require("../../../helpers/chat/responses");
+const { Chat } = require("../../../../models/workspaceChats");
 
 /**
  * Collects the image buffers a generation call should work from. Images the
@@ -48,8 +47,8 @@ function sourceImages(aibitat, { edit = false } = {}) {
  */
 async function persistOutputs(aibitat) {
   if (!aibitat.trackedChatId) return;
-  await WorkspaceChats._update(aibitat.trackedChatId, {
-    response: safeJSONStringify({ outputs: aibitat._pendingOutputs }),
+  await Chat.update(aibitat.handlerProps.ctx, aibitat.trackedChatId, {
+    response: { outputs: aibitat._pendingOutputs },
   });
 }
 

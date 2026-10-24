@@ -3,11 +3,13 @@ const prisma = require("../utils/prisma");
 const EventLogs = {
   logEvent: async function (event, metadata = {}, userId = null) {
     try {
+      const actorId = userId || require("../enterprise/execution-context").optionalExecutionContext()?.userId;
+      const actor = Number.isInteger(Number(actorId)) && Number(actorId) > 0 ? await prisma.users.findUnique({where:{id:Number(actorId)},select:{tenantId:true,username:true}}) : null;
       const eventLog = await prisma.event_logs.create({
         data: {
           event,
-          metadata: metadata ? JSON.stringify(metadata) : null,
-          userId: userId ? Number(userId) : null,
+          userId: actorId ? String(actorId) : null,
+          metadata: JSON.stringify({...metadata, userId:actorId || null,tenantId:actor?.tenantId || null,actor:actor?.username || null}),
           occurredAt: new Date(),
         },
       });
@@ -41,11 +43,9 @@ const EventLogs = {
   getByUserId: async function (userId, limit = null, orderBy = null) {
     try {
       const logs = await prisma.event_logs.findMany({
-        where: { userId },
+        where: { userId: String(userId) },
         ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null
-          ? { orderBy }
-          : { orderBy: { occurredAt: "desc" } }),
+        orderBy: orderBy || { occurredAt: "desc" },
       });
       return logs;
     } catch (error) {
@@ -82,16 +82,18 @@ const EventLogs = {
     offset = null,
     orderBy = null
   ) {
-    const { User } = require("./user");
-
     try {
       const results = await this.where(clause, limit, orderBy, offset);
 
       for (const res of results) {
-        const user = res.userId ? await User.get({ id: res.userId }) : null;
+        const metadata = require("../utils/http").safeJsonParse(res.metadata, {});
+        const actorId = res.userId || metadata?.userId;
+        const user = actorId ? (Number.isInteger(Number(actorId)) && Number(actorId) > 0
+          ? await prisma.users.findUnique({where:{id:Number(actorId)},select:{username:true}})
+          : await prisma.ep_platform_accounts.findUnique({where:{id:String(actorId)},select:{username:true}})) : null;
         res.user = user
           ? { username: user.username }
-          : { username: "unknown user" };
+          : { username: metadata?.actor || "unknown user" };
       }
 
       return results;

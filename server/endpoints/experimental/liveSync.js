@@ -1,114 +1,109 @@
 const { DocumentSyncQueue } = require("../../models/documentSyncQueue");
-const { Document } = require("../../models/documents");
 const { EventLogs } = require("../../models/eventLogs");
 const { SystemSettings } = require("../../models/systemSettings");
 const { Telemetry } = require("../../models/telemetry");
-const { reqBody } = require("../../utils/http");
 const {
-  featureFlagEnabled,
-} = require("../../utils/middleware/featureFlagEnabled");
-const {
-  flexUserRoleValid,
-  ROLES,
-} = require("../../utils/middleware/multiUserProtected");
-const { validWorkspaceSlug } = require("../../utils/middleware/validWorkspace");
-const { validatedRequest } = require("../../utils/middleware/validatedRequest");
+  authenticate,
+  wrap,
+} = require("../../utils/middleware/externalIdentity");
+const { requireDocument } = require("../../enterprise/knowledge");
+const { context, fail } = require("../../enterprise/auth");
 
 function liveSyncEndpoints(app) {
   if (!app) return;
-
+  const enabled = wrap(async (_req, _res, next) => {
+    if (!(await DocumentSyncQueue.enabled()))
+      throw fail(403, "文档自动同步未启用");
+    next();
+  });
   app.post(
     "/experimental/toggle-live-sync",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
-    async (request, response) => {
-      try {
-        const { updatedStatus = false } = reqBody(request);
-        const newStatus =
-          SystemSettings.validations.experimental_live_file_sync(updatedStatus);
-        const currentStatus =
-          (await SystemSettings.get({ label: "experimental_live_file_sync" }))
-            ?.value || "disabled";
-        if (currentStatus === newStatus)
-          return response
-            .status(200)
-            .json({ liveSyncEnabled: newStatus === "enabled" });
-
-        // Already validated earlier - so can hot update.
+    authenticate,
+    wrap(async (req, res) => {
+      if (req.ep.identity !== "platform")
+        throw fail(403, "仅顶级管理员可修改此配置");
+      const newStatus = SystemSettings.validations.experimental_live_file_sync(
+        req.body.updatedStatus === true
+      );
+      const current =
+        (await SystemSettings.get({ label: DocumentSyncQueue.featureKey }))
+          ?.value || "disabled";
+      if (current !== newStatus) {
         await SystemSettings._updateSettings({
-          experimental_live_file_sync: newStatus,
+          [DocumentSyncQueue.featureKey]: newStatus,
         });
         if (newStatus === "enabled") {
           await Telemetry.sendTelemetry("experimental_feature_enabled", {
             feature: "live_file_sync",
           });
-          await EventLogs.logEvent("experimental_feature_enabled", {
-            feature: "live_file_sync",
-          });
-          DocumentSyncQueue.bootWorkers();
-        } else {
-          DocumentSyncQueue.killWorkers();
+          await EventLogs.logEvent(
+            "experimental_feature_enabled",
+            { feature: "live_file_sync" },
+            req.ep.userId
+          );
         }
-
-        response.status(200).json({ liveSyncEnabled: newStatus === "enabled" });
-      } catch (e) {
-        console.error(e);
-        response.status(500).end();
+        await new (require("../../utils/BackgroundWorkers").BackgroundService)().syncDocumentSyncJob(
+          newStatus === "enabled"
+        );
       }
-    }
+      res.json({ liveSyncEnabled: newStatus === "enabled" });
+    })
   );
-
   app.get(
     "/experimental/live-sync/queues",
-    [
-      validatedRequest,
-      flexUserRoleValid([ROLES.admin]),
-      featureFlagEnabled(DocumentSyncQueue.featureKey),
-    ],
-    async (_, response) => {
-      const queues = await DocumentSyncQueue.where(
-        {},
+    authenticate,
+    wrap(async (req, res) => {
+      const where =
+        req.ep.identity === "platform"
+          ? {}
+          : { tenantId: req.ep.tenantId, userId: req.ep.userId };
+      const rows = await DocumentSyncQueue.where(
+        where,
         null,
         { createdAt: "asc" },
-        {
-          workspaceDoc: {
-            include: {
-              workspace: true,
-            },
-          },
-        }
+        { document: true }
       );
-      response.status(200).json({ queues });
-    }
-  );
-
-  // Should be in workspace routes, but is here for now.
-  app.post(
-    "/workspace/:slug/update-watch-status",
-    [
-      validatedRequest,
-      flexUserRoleValid([ROLES.admin, ROLES.manager]),
-      validWorkspaceSlug,
-      featureFlagEnabled(DocumentSyncQueue.featureKey),
-    ],
-    async (request, response) => {
-      try {
-        const { docPath, watchStatus = false } = reqBody(request);
-        const workspace = response.locals.workspace;
-
-        const document = await Document.get({
-          workspaceId: workspace.id,
-          docpath: docPath,
-        });
-        if (!document) return response.sendStatus(404).end();
-
-        await DocumentSyncQueue.toggleWatchStatus(document, watchStatus);
-        return response.status(200).end();
-      } catch (error) {
-        console.error("Error processing the watch status update:", error);
-        return response.status(500).end();
+      const queues = [];
+      for (const row of rows) {
+        try {
+          await requireDocument(req.ep, row.documentId);
+          const { document, ...queue } = row;
+          queues.push({
+            ...queue,
+            document: {
+              id: document.id,
+              title: document.title,
+              libraryId: document.libraryId,
+            },
+          });
+        } catch (error) {
+          if (error.status !== 404) throw error;
+        }
       }
-    }
+      res.json({ queues, liveSyncEnabled: await DocumentSyncQueue.enabled() });
+    })
+  );
+  app.post(
+    "/documents/:id/update-watch-status",
+    authenticate,
+    enabled,
+    wrap(async (req, res) => {
+      if (typeof req.body.watchStatus !== "boolean")
+        throw fail(400, "监控状态无效");
+      const document = await requireDocument(req.ep, req.params.id);
+      let executor = req.ep;
+      if (req.ep.identity === "platform" && req.body.watchStatus) {
+        executor = await context(req.body.userId);
+        if (executor.tenantId !== document.tenantId)
+          throw fail(400, "请选择资料所属企业的执行用户");
+      }
+      await DocumentSyncQueue.toggleWatchStatus(
+        executor,
+        document,
+        req.body.watchStatus
+      );
+      res.json({ success: true });
+    })
   );
 }
-
 module.exports = { liveSyncEndpoints };

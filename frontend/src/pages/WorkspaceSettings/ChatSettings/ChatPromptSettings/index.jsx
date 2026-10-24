@@ -119,7 +119,7 @@ export default function ChatPromptSettings({ workspace }) {
     <>
       <ChatPromptHistory
         ref={promptHistoryRef}
-        workspaceSlug={workspace.slug}
+        workspaceSlug={workspace.tenantId || workspace.slug}
         show={showPromptHistory}
         onRestore={handleRestoreFromHistory}
         onPublishClick={handlePublishFromHistory}

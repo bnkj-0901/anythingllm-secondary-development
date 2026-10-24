@@ -18,6 +18,7 @@ export default function ExportRow({
   history = [],
   workspace = null,
   threadSlug = null,
+  onExport = null,
   onClose,
 }) {
   const { t } = useTranslation();
@@ -25,13 +26,15 @@ export default function ExportRow({
   const [exporting, setExporting] = useState(false);
 
   async function handleExport(format) {
-    if (exporting || !workspace?.slug) return;
+    if (exporting || (!onExport && !workspace?.slug)) return;
     setExporting(true);
-    const blob = await Workspace.exportChatsToType(
-      workspace.slug,
-      threadSlug,
-      format.key
-    );
+    const blob = onExport
+      ? await onExport(format.key)
+      : await Workspace.exportChatsToType(
+          workspace.slug,
+          threadSlug,
+          format.key
+        );
     if (blob) {
       const stamp = moment().format("YYYY-MM-DD HH:mm:ss");
       saveAs(blob, `AnythingLLM Export - ${stamp}.${format.ext}`);

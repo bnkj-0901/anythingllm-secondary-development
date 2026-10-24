@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { CloudClient } = require("chromadb");
 const { Chroma } = require("../chroma");
 const { toChunks } = require("../../helpers");
@@ -27,13 +28,13 @@ class ChromaCloud extends Chroma {
   };
 
   async connect() {
-    if (process.env.VECTOR_DB !== "chromacloud")
+    if (env.VECTOR_DB !== "chromacloud")
       throw new Error("ChromaCloud::Invalid ENV settings");
 
     const client = new CloudClient({
-      apiKey: process.env.CHROMACLOUD_API_KEY,
-      tenant: process.env.CHROMACLOUD_TENANT,
-      database: process.env.CHROMACLOUD_DATABASE,
+      apiKey: env.CHROMACLOUD_API_KEY,
+      tenant: env.CHROMACLOUD_TENANT,
+      database: env.CHROMACLOUD_DATABASE,
     });
 
     const isAlive = await client.heartbeat();

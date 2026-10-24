@@ -53,7 +53,8 @@ COPY ./docker/docker-healthcheck.sh /usr/local/bin/
 COPY --chown=anythingllm:anythingllm ./docker/.env.example /app/server/.env
 
 # Ensure the scripts are executable
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh && \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-healthcheck.sh
 
 USER anythingllm
@@ -124,7 +125,8 @@ COPY ./docker/docker-healthcheck.sh /usr/local/bin/
 COPY --chown=anythingllm:anythingllm ./docker/.env.example /app/server/.env
 
 # Ensure the scripts are executable
-RUN chmod +x /usr/local/bin/docker-entrypoint.sh && \
+RUN sed -i 's/\r$//' /usr/local/bin/docker-entrypoint.sh /usr/local/bin/docker-healthcheck.sh && \
+    chmod +x /usr/local/bin/docker-entrypoint.sh && \
     chmod +x /usr/local/bin/docker-healthcheck.sh
 
 #############################################
@@ -153,9 +155,15 @@ WORKDIR /app
 # Install server layer
 # Also pull and build collector deps (chromium issues prevent bad bindings)
 FROM build AS backend-build
+# canvas falls back to a native build when its prebuilt binary is unavailable.
+USER root
+RUN apt-get update && apt-get install -yq --no-install-recommends \
+    pkg-config python3 libcairo2-dev libpango1.0-dev libjpeg-dev libgif-dev librsvg2-dev && \
+    apt-get clean && rm -rf /var/lib/apt/lists/*
+USER anythingllm
 COPY --chown=anythingllm:anythingllm ./server /app/server/
 WORKDIR /app/server
-RUN yarn install --production --network-timeout 100000 && yarn cache clean
+RUN yarn install --production --network-timeout 100000 && yarn prisma generate --schema prisma/schema.prisma && yarn cache clean
 WORKDIR /app
 
 # Install collector dependencies
@@ -174,6 +182,10 @@ COPY --chown=anythingllm:anythingllm --from=frontend-build /app/frontend/dist /a
 
 # Setup the environment
 ENV NODE_ENV=production
+ENV STORAGE_DIR=/app/server/storage
+ENV PUBLIC_DIR=/app/server/public
+ENV SERVER_PORT=3001
+ENV COLLECTOR_PORT=8888
 ENV ANYTHING_LLM_RUNTIME=docker
 ENV DEPLOYMENT_VERSION=1.18.0
 

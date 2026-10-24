@@ -18,6 +18,8 @@ const PaperlessNgxLoader = require("./PaperlessNgxLoader");
  * @returns
  */
 async function loadPaperlessNgx({ baseUrl = null, apiToken = null }, response) {
+  const returnDocuments = response.locals.returnDocuments === true;
+  const documents = [];
   if (!baseUrl || !validBaseUrl(baseUrl)) {
     return {
       success: false,
@@ -59,7 +61,7 @@ async function loadPaperlessNgx({ baseUrl = null, apiToken = null }, response) {
     `paperless-${hostname}-${v4().slice(0, 4)}`
   ).toLowerCase();
   const outFolderPath = path.resolve(documentsFolder, outFolder);
-  if (!fs.existsSync(outFolderPath))
+  if (!returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
 
   docs.forEach((doc) => {
@@ -88,16 +90,19 @@ async function loadPaperlessNgx({ baseUrl = null, apiToken = null }, response) {
     const fileName = sanitizeFileName(
       `${slugify(doc.metadata.title)}-${data.id}`
     );
-    writeToServerDocuments({
-      data,
-      filename: fileName,
-      destinationOverride: outFolderPath,
-    });
+    if (returnDocuments) documents.push(data);
+    else
+      writeToServerDocuments({
+        data,
+        filename: fileName,
+        destinationOverride: outFolderPath,
+      });
   });
 
   return {
     success: true,
     reason: null,
+    ...(returnDocuments ? { documents } : {}),
     data: {
       files: docs.length,
       destination: outFolder,

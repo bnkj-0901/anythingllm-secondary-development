@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { default: weaviate } = require("weaviate-client");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
@@ -9,6 +10,11 @@ const { sourceIdentifier } = require("../../chats");
 const { VectorDatabase } = require("../base");
 
 class Weaviate extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -20,19 +26,19 @@ class Weaviate extends VectorDatabase {
   // Weaviate Cloud serves gRPC on a separate host, which `connectToWeaviateCloud` resolves.
   // Self-hosted instances serve gRPC on WEAVIATE_GRPC_HOST (defaults to the HTTP host) and WEAVIATE_GRPC_PORT.
   async connect() {
-    if (process.env.VECTOR_DB !== "weaviate")
+    if (env.VECTOR_DB !== "weaviate")
       throw new Error("Weaviate::Invalid ENV settings");
 
-    const weaviateUrl = new URL(process.env.WEAVIATE_ENDPOINT);
+    const weaviateUrl = new URL(env.WEAVIATE_ENDPOINT);
     const isSecure = weaviateUrl.protocol === "https:";
-    const isWeaviateCloud = process.env.WEAVIATE_DEPLOYMENT
-      ? process.env.WEAVIATE_DEPLOYMENT === "cloud"
+    const isWeaviateCloud = env.WEAVIATE_DEPLOYMENT
+      ? env.WEAVIATE_DEPLOYMENT === "cloud"
       : weaviateUrl.hostname.endsWith(".weaviate.cloud") ||
         weaviateUrl.hostname.endsWith(".weaviate.network");
     const options = {
-      ...(process.env?.WEAVIATE_API_KEY?.length > 0
+      ...(env?.WEAVIATE_API_KEY?.length > 0
         ? {
-            authCredentials: new weaviate.ApiKey(process.env?.WEAVIATE_API_KEY),
+            authCredentials: new weaviate.ApiKey(env?.WEAVIATE_API_KEY),
           }
         : {}),
     };
@@ -43,8 +49,8 @@ class Weaviate extends VectorDatabase {
           httpHost: weaviateUrl.hostname,
           httpPort: Number(weaviateUrl.port) || (isSecure ? 443 : 80),
           httpSecure: isSecure,
-          grpcHost: process.env.WEAVIATE_GRPC_HOST || weaviateUrl.hostname,
-          grpcPort: Number(process.env.WEAVIATE_GRPC_PORT) || 50051,
+          grpcHost: env.WEAVIATE_GRPC_HOST || weaviateUrl.hostname,
+          grpcPort: Number(env.WEAVIATE_GRPC_PORT) || 50051,
           grpcSecure: isSecure,
           ...options,
         });

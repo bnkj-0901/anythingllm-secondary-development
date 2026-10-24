@@ -1,4 +1,4 @@
-const { makeJWT } = require("../utils/http");
+const { context, signed } = require("../enterprise/auth");
 const prisma = require("../utils/prisma");
 
 /**
@@ -21,27 +21,24 @@ const TemporaryAuthToken = {
    * @param {number} userId
    * @returns {Promise<{token: string|null, error: string | null}>}
    */
-  issue: async function (userId = null) {
-    if (!userId)
-      throw new Error("User ID is required to issue a temporary auth token.");
-    await this.invalidateUserTokens(userId);
-
-    try {
-      const token = this.makeTempToken();
-      const expiresAt = new Date(Date.now() + this.expiry);
-      await prisma.temporary_auth_tokens.create({
+  issue: async function (userId) {
+    const ctx = await context(userId);
+    const token = this.makeTempToken();
+    await prisma.$transaction(async (tx) => {
+      await tx.temporary_auth_tokens.deleteMany({
+        where: { userId: ctx.userId },
+      });
+      await tx.temporary_auth_tokens.create({
         data: {
           token,
-          expiresAt,
-          userId: Number(userId),
+          tenantId: ctx.tenantId,
+          userId: ctx.userId,
+          authVersion: ctx.authVersion,
+          expiresAt: new Date(Date.now() + this.expiry),
         },
       });
-
-      return { token, error: null };
-    } catch (error) {
-      console.error("FAILED TO CREATE TEMPORARY AUTH TOKEN.", error.message);
-      return { token: null, error: error.message };
-    }
+    });
+    return { token, error: null };
   },
 
   /**
@@ -66,37 +63,34 @@ const TemporaryAuthToken = {
    * @param {string} publicToken - the token to validate against
    * @returns {Promise<{sessionToken: string|null, token: import("@prisma/client").temporary_auth_tokens & {user: import("@prisma/client").users} | null, error: string | null}>}
    */
-  validate: async function (publicToken = "") {
-    /** @type {import("@prisma/client").temporary_auth_tokens & {user: import("@prisma/client").users} | undefined | null} **/
-    let token;
-
+  validate: async function (publicToken = "", tenantId) {
     try {
-      if (!publicToken)
-        throw new Error(
-          "Public token is required to validate a temporary auth token."
-        );
-      token = await prisma.temporary_auth_tokens.findUnique({
-        where: { token: String(publicToken) },
-        include: { user: true },
+      if (!publicToken || !tenantId) throw new Error("Invalid token");
+      const row = await prisma.temporary_auth_tokens.findFirst({
+        where: { token: String(publicToken), tenantId },
       });
-      if (!token) throw new Error("Invalid token.");
-      if (token.expiresAt < new Date()) throw new Error("Token expired.");
-      if (token.user.suspended) throw new Error("User account suspended.");
-
-      // Create a new session token for the user valid for 30 days
-      const sessionToken = makeJWT(
-        { id: token.user.id, username: token.user.username },
-        process.env.JWT_EXPIRY
-      );
-
-      return { sessionToken, token, error: null };
-    } catch (error) {
-      console.error("FAILED TO VALIDATE TEMPORARY AUTH TOKEN.", error.message);
-      return { sessionToken: null, token: null, error: error.message };
-    } finally {
-      // Delete the token after it has been used under all circumstances if it was retrieved
-      if (token)
-        await prisma.temporary_auth_tokens.delete({ where: { id: token.id } });
+      if (!row || row.expiresAt < new Date())
+        throw new Error("Invalid or expired token");
+      const ctx = await context(row.userId);
+      if (ctx.tenantId !== tenantId || ctx.authVersion !== row.authVersion)
+        throw new Error("Execution identity changed");
+      const consumed = await prisma.temporary_auth_tokens.deleteMany({
+        where: { id: row.id, token: row.token, tenantId },
+      });
+      if (consumed.count !== 1) throw new Error("Token already used");
+      const session = signed(ctx);
+      return {
+        sessionToken: session.token,
+        session,
+        token: { ...row, user: ctx.user },
+        error: null,
+      };
+    } catch {
+      return {
+        sessionToken: null,
+        token: null,
+        error: "Invalid or expired token",
+      };
     }
   },
 };

@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -13,18 +17,20 @@ const {
 class LiteLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.LITE_LLM_BASE_PATH)
+    if (!env.LITE_LLM_BASE_PATH)
       throw new Error(
         "LiteLLM must have a valid base path to use for the api."
       );
 
     this.className = "LiteLLM";
-    this.basePath = process.env.LITE_LLM_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.LITE_LLM_API_KEY ?? null,
-    });
-    this.model = modelPreference ?? process.env.LITE_LLM_MODEL_PREF ?? null;
+    this.basePath = env.LITE_LLM_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.LITE_LLM_API_KEY ?? null,
+      })
+    );
+    this.model = modelPreference ?? env.LITE_LLM_MODEL_PREF ?? null;
 
     if (!this.model) throw new Error("LiteLLM must have a valid model set.");
     this.limits = {
@@ -58,7 +64,7 @@ class LiteLLM {
   }
 
   static promptWindowLimit(_modelName) {
-    const limit = process.env.LITE_LLM_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.LITE_LLM_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);
@@ -67,7 +73,7 @@ class LiteLLM {
   // Ensure the user set a value for the token limit
   // and if undefined - assume 4096 window.
   promptWindowLimit() {
-    const limit = process.env.LITE_LLM_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.LITE_LLM_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);

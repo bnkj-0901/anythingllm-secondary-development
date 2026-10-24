@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { isAbortError } = require("../../helpers/abortSignals");
 const {
@@ -21,25 +25,26 @@ const {
 class GenericOpenAiLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.GENERIC_OPEN_AI_BASE_PATH)
+    if (!env.GENERIC_OPEN_AI_BASE_PATH)
       throw new Error(
         "GenericOpenAI must have a valid base path to use for the api."
       );
 
     this.className = "GenericOpenAiLLM";
-    this.basePath = process.env.GENERIC_OPEN_AI_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.GENERIC_OPEN_AI_API_KEY ?? null,
-      defaultHeaders: {
-        "User-Agent": getAnythingLLMUserAgent(),
-        ...GenericOpenAiLLM.parseCustomHeaders(),
-      },
-    });
-    this.model =
-      modelPreference ?? process.env.GENERIC_OPEN_AI_MODEL_PREF ?? null;
-    this.maxTokens = process.env.GENERIC_OPEN_AI_MAX_TOKENS
-      ? toValidNumber(process.env.GENERIC_OPEN_AI_MAX_TOKENS, 1024)
+    this.basePath = env.GENERIC_OPEN_AI_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.GENERIC_OPEN_AI_API_KEY ?? null,
+        defaultHeaders: {
+          "User-Agent": getAnythingLLMUserAgent(),
+          ...GenericOpenAiLLM.parseCustomHeaders(),
+        },
+      })
+    );
+    this.model = modelPreference ?? env.GENERIC_OPEN_AI_MODEL_PREF ?? null;
+    this.maxTokens = env.GENERIC_OPEN_AI_MAX_TOKENS
+      ? toValidNumber(env.GENERIC_OPEN_AI_MAX_TOKENS, 1024)
       : 1024;
     if (!this.model)
       throw new Error("GenericOpenAI must have a valid model set.");
@@ -69,11 +74,11 @@ class GenericOpenAiLLM {
    * @returns {string}
    */
   static maxTokensKey() {
-    return process.env.GENERIC_OPEN_AI_MODEL_MAX_TOKEN_KEY || "max_tokens";
+    return env.GENERIC_OPEN_AI_MODEL_MAX_TOKEN_KEY || "max_tokens";
   }
 
   static parseCustomHeaders() {
-    const customHeadersEnv = process.env.GENERIC_OPEN_AI_CUSTOM_HEADERS;
+    const customHeadersEnv = env.GENERIC_OPEN_AI_CUSTOM_HEADERS;
     if (!customHeadersEnv) return {};
 
     const headers = {};
@@ -105,12 +110,12 @@ class GenericOpenAiLLM {
   }
 
   streamingEnabled() {
-    if (process.env.GENERIC_OPENAI_STREAMING_DISABLED === "true") return false;
+    if (env.GENERIC_OPENAI_STREAMING_DISABLED === "true") return false;
     return "streamGetChatCompletion" in this;
   }
 
   static promptWindowLimit(_modelName) {
-    const limit = process.env.GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);
@@ -119,7 +124,7 @@ class GenericOpenAiLLM {
   // Ensure the user set a value for the token limit
   // and if undefined - assume 4096 window.
   promptWindowLimit() {
-    const limit = process.env.GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.GENERIC_OPEN_AI_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);
@@ -225,8 +230,8 @@ class GenericOpenAiLLM {
    * @returns {Object}
    */
   #includeStreamOptionsUsage() {
-    if (!("GENERIC_OPEN_AI_REPORT_USAGE" in process.env)) return {};
-    if (process.env.GENERIC_OPEN_AI_REPORT_USAGE !== "true") return {};
+    if (!("GENERIC_OPEN_AI_REPORT_USAGE" in env)) return {};
+    if (env.GENERIC_OPEN_AI_REPORT_USAGE !== "true") return {};
     return {
       stream_options: {
         include_usage: true,
@@ -452,21 +457,17 @@ class GenericOpenAiLLM {
   #supportsCapabilityFromENV(capability = "") {
     switch (capability) {
       case "tools":
-        return !process.env.PROVIDER_DISABLE_NATIVE_TOOL_CALLING?.includes(
+        return !env.PROVIDER_DISABLE_NATIVE_TOOL_CALLING?.includes(
           "generic-openai"
         );
       case "reasoning":
-        return !!process.env.PROVIDER_SUPPORTS_REASONING?.includes(
-          "generic-openai"
-        );
+        return !!env.PROVIDER_SUPPORTS_REASONING?.includes("generic-openai");
       case "imageGeneration":
-        return !!process.env.PROVIDER_SUPPORTS_IMAGE_GENERATION?.includes(
+        return !!env.PROVIDER_SUPPORTS_IMAGE_GENERATION?.includes(
           "generic-openai"
         );
       case "vision":
-        return !!process.env.PROVIDER_SUPPORTS_VISION?.includes(
-          "generic-openai"
-        );
+        return !!env.PROVIDER_SUPPORTS_VISION?.includes("generic-openai");
       default:
         return false;
     }

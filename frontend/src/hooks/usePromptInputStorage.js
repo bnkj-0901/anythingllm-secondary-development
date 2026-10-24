@@ -88,10 +88,16 @@ export default function usePromptInputStorage({
   setPromptInput,
   workspaceSlug = null,
   threadSlug = null,
+  storageKey: explicitStorageKey = null,
 }) {
   const params = useParams();
   const storageKey =
-    threadSlug ?? params.threadSlug ?? workspaceSlug ?? params.slug ?? null;
+    explicitStorageKey ??
+    threadSlug ??
+    params.threadSlug ??
+    workspaceSlug ??
+    params.slug ??
+    null;
   const pendingHydration = useRef(true);
 
   const debouncedWriteToStorage = useMemo(

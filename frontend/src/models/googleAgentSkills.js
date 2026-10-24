@@ -1,5 +1,6 @@
 import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
+const tenantQuery = () => `?tenantId=${encodeURIComponent(new URLSearchParams(window.location.search).get("tenantId") || "")}`;
 
 const GoogleAgentSkills = {
   gmail: {
@@ -8,7 +9,7 @@ const GoogleAgentSkills = {
      * @returns {Promise<{success: boolean, isConfigured?: boolean, config?: {deploymentId: string, apiKey: string}, error?: string}>}
      */
     getStatus: async () => {
-      return await fetch(`${API_BASE}/admin/agent-skills/gmail/status`, {
+      return await fetch(`${API_BASE}/admin/agent-skills/gmail/status${tenantQuery()}`, {
         method: "GET",
         headers: baseHeaders(),
       })
@@ -27,7 +28,7 @@ const GoogleAgentSkills = {
      */
     getStatus: async () => {
       return await fetch(
-        `${API_BASE}/admin/agent-skills/google-calendar/status`,
+        `${API_BASE}/admin/agent-skills/google-calendar/status${tenantQuery()}`,
         {
           method: "GET",
           headers: baseHeaders(),

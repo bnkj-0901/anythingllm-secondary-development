@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { ChromaClient } = require("chromadb");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
@@ -12,6 +13,11 @@ const COLLECTION_REGEX = new RegExp(
 );
 
 class Chroma extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -65,17 +71,17 @@ class Chroma extends VectorDatabase {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "chroma")
+    if (env.VECTOR_DB !== "chroma")
       throw new Error("Chroma::Invalid ENV settings");
 
     const client = new ChromaClient({
-      path: process.env.CHROMA_ENDPOINT, // if not set will fallback to localhost:8000
-      ...(!!process.env.CHROMA_API_HEADER && !!process.env.CHROMA_API_KEY
+      path: env.CHROMA_ENDPOINT, // if not set will fallback to localhost:8000
+      ...(!!env.CHROMA_API_HEADER && !!env.CHROMA_API_KEY
         ? {
             fetchOptions: {
               headers: parseAuthHeader(
-                process.env.CHROMA_API_HEADER || "X-Api-Key",
-                process.env.CHROMA_API_KEY
+                env.CHROMA_API_HEADER || "X-Api-Key",
+                env.CHROMA_API_KEY
               ),
             },
           }

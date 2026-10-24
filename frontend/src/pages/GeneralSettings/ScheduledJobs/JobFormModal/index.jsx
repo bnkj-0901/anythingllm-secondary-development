@@ -9,6 +9,8 @@ import JobDescription from "./JobDescription";
 import JobSchedule from "./JobSchedule";
 import ToolsSelector from "./ToolsSelector";
 import FormActions from "./FormActions";
+import useUser from "@/hooks/useUser";
+import ExecutionIdentity from "@/components/lib/ExecutionIdentity";
 
 function setDefaultFormState(job) {
   return {
@@ -22,6 +24,13 @@ function setDefaultFormState(job) {
 
 export default function JobFormModal({ job = null, onClose, onSaved }) {
   const { t } = useTranslation();
+  const { user } = useUser();
+  const platform = user?.identity === "platform";
+  const [execution, setExecution] = useState({
+    tenantId: job?.tenantId || "",
+    userId: job?.userId || "",
+  });
+  const { tenantId, userId } = execution;
   const isEditing = !!job;
   const [form, setForm] = useState(setDefaultFormState(job));
   const [availableTools, setAvailableTools] = useState([]);
@@ -38,10 +47,12 @@ export default function JobFormModal({ job = null, onClose, onSaved }) {
   };
 
   useEffect(() => {
-    ScheduledJobs.availableTools().then(({ tools }) => {
-      setAvailableTools(tools || []);
-    });
-  }, []);
+    ScheduledJobs.availableTools(platform ? { tenantId, userId } : {}).then(
+      ({ tools }) => {
+        setAvailableTools(tools || []);
+      }
+    );
+  }, [tenantId, userId, platform]);
 
   const handleChange = (e) => {
     const { name, value } = e.target;
@@ -76,6 +87,7 @@ export default function JobFormModal({ job = null, onClose, onSaved }) {
 
     setSaving(true);
     const data = {
+      ...(platform && !isEditing ? { tenantId, userId } : {}),
       name: form.name.trim(),
       prompt: form.prompt.trim(),
       schedule: form.schedule.trim(),
@@ -125,6 +137,9 @@ export default function JobFormModal({ job = null, onClose, onSaved }) {
         )}
       </ModalHeader>
       <ModalBody>
+        {platform && !isEditing && (
+          <ExecutionIdentity value={execution} onChange={setExecution} />
+        )}
         <JobDescription form={form} errors={errors} onChange={handleChange} />
 
         <JobSchedule

@@ -40,9 +40,11 @@ class MetaGenerator {
     ],
   };
 
-  constructor() {
-    if (MetaGenerator._instance) return MetaGenerator._instance;
-    MetaGenerator._instance = this;
+  constructor({ settings = null } = {}) {
+    // A tenant reader owns its cache; the original global caller stays a singleton.
+    if (!settings && MetaGenerator._instance) return MetaGenerator._instance;
+    this.settings = settings;
+    if (!settings) MetaGenerator._instance = this;
   }
 
   #log(text, ...args) {
@@ -216,11 +218,12 @@ class MetaGenerator {
   async #fetchConfg() {
     this.#log(`fetching custom meta tag settings...`);
     const { SystemSettings } = require("../../models/systemSettings");
-    const customTitle = await SystemSettings.getValueOrFallback(
+    const settings = this.settings || SystemSettings;
+    const customTitle = await settings.getValueOrFallback(
       { label: "meta_page_title" },
       null
     );
-    const faviconURL = await SystemSettings.getValueOrFallback(
+    const faviconURL = await settings.getValueOrFallback(
       { label: "meta_page_favicon" },
       null
     );
@@ -344,11 +347,12 @@ class MetaGenerator {
   async generateManifest(response) {
     try {
       const { SystemSettings } = require("../../models/systemSettings");
-      const manifestName = await SystemSettings.getValueOrFallback(
+      const settings = this.settings || SystemSettings;
+      const manifestName = await settings.getValueOrFallback(
         { label: "meta_page_title" },
         "AnythingLLM"
       );
-      const faviconURL = await SystemSettings.getValueOrFallback(
+      const faviconURL = await settings.getValueOrFallback(
         { label: "meta_page_favicon" },
         null
       );

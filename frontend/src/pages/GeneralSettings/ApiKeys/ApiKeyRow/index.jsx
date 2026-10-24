@@ -39,6 +39,9 @@ export default function ApiKeyRow({ apiKey, removeApiKey }) {
       <tr className="bg-transparent text-white text-opacity-80 text-xs font-medium border-b border-white/10">
         <td scope="row" className="px-6 py-3 whitespace-nowrap align-middle">
           {apiKey.name || t("api.row.unnamed")}
+          <p className="text-theme-text-secondary text-[11px] mt-1">
+            执行用户：{apiKey.executionUser?.username || "已停用或删除"}
+          </p>
         </td>
         <td scope="row" className="px-6 py-3 align-middle">
           <code className="font-mono text-[11px] break-all text-theme-text-primary">

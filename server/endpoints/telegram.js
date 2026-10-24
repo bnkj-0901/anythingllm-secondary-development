@@ -1,335 +1,193 @@
 const {
-  ExternalCommunicationConnector,
+  ExternalCommunicationConnector: Connector,
 } = require("../models/externalCommunicationConnector");
-const { Telemetry } = require("../models/telemetry");
 const { TelegramBotService } = require("../utils/telegramBot");
-const { validatedRequest } = require("../utils/middleware/validatedRequest");
-const { isSingleUserMode } = require("../utils/middleware/multiUserProtected");
-const { reqBody } = require("../utils/http");
-const { EventLogs } = require("../models/eventLogs");
-const { Workspace } = require("../models/workspace");
-const { WorkspaceThread } = require("../models/workspaceThread");
+const {
+  authenticate,
+  manager,
+  tenantId,
+  wrap,
+} = require("../utils/middleware/externalIdentity");
+const { fail } = require("../enterprise/auth");
 const { encryptToken } = require("../utils/telegramBot/utils");
-
 function telegramEndpoints(app) {
-  if (!app) return;
-
   app.get(
     "/telegram/config",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
-      try {
-        const connector = await ExternalCommunicationConnector.get("telegram");
-        if (!connector) {
-          return response.status(200).json({ config: null });
-        }
-
-        const service = new TelegramBotService();
-
-        // Resolve workspace, thread, and model from the first approved user's
-        // active state, falling back to the default workspace config.
-        const approvedUsers = connector.config.approved_users || [];
-        const activeUser = approvedUsers[0];
-        const workspaceSlug =
-          activeUser?.active_workspace ||
-          connector.config.default_workspace ||
-          null;
-        const threadSlug = activeUser?.active_thread || null;
-
-        let thread = null;
-        let workspace = await Workspace.get({ slug: workspaceSlug });
-        if (!workspace) {
-          const available = await Workspace.where({}, 1);
-          if (available.length) workspace = available[0];
-        }
-
-        if (!threadSlug) {
-          const availableThreads = await WorkspaceThread.where({
-            workspace_id: workspace.id,
-          });
-          if (availableThreads.length) thread = availableThreads[0];
-        }
-
-        return response.status(200).json({
-          config: {
-            active: connector.active,
-            connected: service.isRunning,
-            bot_username: connector.config.bot_username || null,
-            default_workspace: workspace?.name || workspaceSlug || "—",
-            active_thread_name: thread?.name || "Default",
-            chat_model: workspace?.chatModel || "System default",
-            voice_response_mode:
-              connector.config.voice_response_mode || "text_only",
-          },
-        });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    wrap(async (req, res) => {
+      const id = tenantId(req),
+        row = await Connector.get("telegram", id),
+        service = new TelegramBotService(id);
+      res.json({
+        config: row
+          ? {
+              active: row.active,
+              connected: service.isRunning,
+              bot_username: row.config.bot_username,
+              voice_response_mode:
+                row.config.voice_response_mode || "text_only",
+            }
+          : null,
+      });
+    })
   );
-
-  /**
-   * Verify token, save config, and start the Telegram bot.
-   */
-  app.post(
-    "/telegram/connect",
-    [validatedRequest, isSingleUserMode],
-    async (request, response) => {
-      try {
-        const { bot_token, default_workspace = null } = reqBody(request);
-        if (!bot_token) {
-          return response.status(400).json({
-            success: false,
-            error: "Bot token is required.",
-          });
-        }
-
-        // Verify the token with Telegram API
-        const verification = await TelegramBotService.verifyToken(
-          String(bot_token)
-        );
-        if (!verification.valid) {
-          return response.status(400).json({
-            success: false,
-            error: `Invalid bot token: ${verification.error}`,
-          });
-        }
-
-        let workspaceSlug = null;
-        if (default_workspace) workspaceSlug = String(default_workspace);
-        else {
-          const workspaces = await Workspace.where({}, 1);
-          if (workspaces.length) workspaceSlug = workspaces[0].slug;
-          else {
-            const { workspace } = await Workspace.new(
-              `${verification.username} Workspace`,
-              null,
-              { chatMode: "automatic" }
-            );
-            if (workspace) workspaceSlug = workspace.slug;
-          }
-        }
-
-        if (!workspaceSlug) {
-          return response.status(400).json({
-            success: false,
-            error: "No workspace found or could be created.",
-          });
-        }
-
-        // Preserve approved users when reconnecting with a new token
-        const existing = await ExternalCommunicationConnector.get("telegram");
-        const storedConfig = {
-          bot_username: verification.username,
-          default_workspace: workspaceSlug,
-          approved_users: existing?.config?.approved_users || [],
-          voice_response_mode:
-            existing?.config?.voice_response_mode || "text_only",
-        };
-
-        // Save config with encrypted token
-        const { error } = await ExternalCommunicationConnector.upsert(
-          "telegram",
-          {
-            ...storedConfig,
-            bot_token: encryptToken(String(bot_token)),
-            active: true,
-          }
-        );
-        if (error) return response.status(500).json({ success: false, error });
-
-        // Start the bot with the plaintext token
-        const service = new TelegramBotService();
-        await service.start({ ...storedConfig, bot_token: String(bot_token) });
-
-        await EventLogs.logEvent("telegram_bot_connected", {
-          bot_username: verification.username,
-        });
-        await Telemetry.sendTelemetry("telegram_bot_connected");
-        return response.status(200).json({
-          success: true,
-          bot_username: verification.username,
-        });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
-  );
-
-  app.post(
-    "/telegram/disconnect",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
-      try {
-        const service = new TelegramBotService();
-        await service.stop();
-        await ExternalCommunicationConnector.delete("telegram");
-        await EventLogs.logEvent("telegram_bot_disconnected");
-        return response.status(200).json({ success: true });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
-  );
-
   app.get(
     "/telegram/status",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
-      try {
-        const connector = await ExternalCommunicationConnector.get("telegram");
-        const service = new TelegramBotService();
-        return response.status(200).json({
-          active: connector?.active && service.isRunning,
-          bot_username: connector?.config?.bot_username || null,
-        });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    wrap(async (req, res) => {
+      const id = tenantId(req),
+        row = await Connector.get("telegram", id);
+      res.json({
+        active: !!row?.active && new TelegramBotService(id).isRunning,
+        bot_username: row?.config.bot_username || null,
+      });
+    })
   );
-
+  app.post(
+    "/telegram/connect",
+    authenticate,
+    manager,
+    wrap(async (req, res) => {
+      const id = tenantId(req),
+        { bot_token } = req.body;
+      if (typeof bot_token !== "string" || !bot_token)
+        throw fail(400, "Bot token is required");
+      const check = await TelegramBotService.verifyToken(bot_token);
+      if (!check.valid) throw fail(400, "Invalid bot token");
+      const existing = await Connector.get("telegram", id);
+      const config = {
+        bot_id: check.botId,
+        bot_username: check.username,
+        bot_token: encryptToken(bot_token),
+        active: true,
+        approved_users:
+          existing?.botId === check.botId
+            ? existing.config.approved_users || []
+            : [],
+        voice_response_mode:
+          existing?.config.voice_response_mode || "text_only",
+      };
+      const { connector } = await Connector.upsert("telegram", config, id);
+      if (!connector)
+        throw fail(
+          409,
+          "This Telegram Bot is already connected or could not be saved"
+        );
+      await new TelegramBotService(id).start({
+        ...connector.config,
+        bot_token,
+      });
+      res.json({ success: true, bot_username: check.username });
+    })
+  );
+  app.post(
+    "/telegram/disconnect",
+    authenticate,
+    manager,
+    wrap(async (req, res) => {
+      const id = tenantId(req);
+      await new TelegramBotService(id).stop();
+      await Connector.delete("telegram", id);
+      res.json({ success: true });
+    })
+  );
   app.get(
     "/telegram/pending-users",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
-      try {
-        const service = new TelegramBotService();
-        return response
-          .status(200)
-          .json({ users: service.pendingPairings || [] });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    manager,
+    wrap(async (req, res) =>
+      res.json({
+        users: new TelegramBotService(tenantId(req)).pendingPairings.map(
+          ({ code: _code, ...item }) => item
+        ),
+      })
+    )
   );
-
   app.get(
     "/telegram/approved-users",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
-      try {
-        const connector = await ExternalCommunicationConnector.get("telegram");
-        const approved = connector?.config?.approved_users || [];
-        return response.status(200).json({ users: approved });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    wrap(async (req, res) => {
+      const users =
+        (await Connector.get("telegram", tenantId(req)))?.config
+          .approved_users || [];
+      res.json({
+        users:
+          req.ep.identity === "platform" || req.ep.role === "admin"
+            ? users
+            : users.filter((user) => user.userId === req.ep.userId),
+      });
+    })
   );
-
+  // The user proves both the signed-in enterprise account and the Telegram chat's code.
   app.post(
     "/telegram/approve-user",
-    [validatedRequest, isSingleUserMode],
-    async (request, response) => {
+    authenticate,
+    wrap(async (req, res) => {
+      if (req.ep.identity !== "tenant")
+        throw fail(400, "Pair from the enterprise user account");
+      const { chatId, code } = req.body;
       try {
-        const { chatId } = reqBody(request);
-        if (!chatId)
-          return response
-            .status(400)
-            .json({ success: false, error: "chatId is required." });
-
-        const service = new TelegramBotService();
-        await service.approvePendingUser(chatId);
-        await EventLogs.logEvent("telegram_user_approved", { chatId });
-        return response.status(200).json({ success: true });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
+        await new TelegramBotService(req.ep.tenantId).approvePendingUser(
+          chatId,
+          req.ep.userId,
+          code
+        );
+      } catch {
+        throw fail(400, "配对码无效、已过期或 Telegram 账号已绑定其他用户");
       }
-    }
+      res.json({ success: true });
+    })
   );
-
   app.post(
     "/telegram/deny-user",
-    [validatedRequest, isSingleUserMode],
-    async (request, response) => {
-      try {
-        const { chatId } = reqBody(request);
-        if (!chatId)
-          return response
-            .status(400)
-            .json({ success: false, error: "chatId is required." });
-
-        const service = new TelegramBotService();
-        await service.denyPendingUser(chatId);
-        await EventLogs.logEvent("telegram_user_denied", { chatId });
-        return response.status(200).json({ success: true });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    manager,
+    wrap(async (req, res) => {
+      await new TelegramBotService(tenantId(req)).denyPendingUser(
+        req.body.chatId
+      );
+      res.json({ success: true });
+    })
   );
-
   app.post(
     "/telegram/revoke-user",
-    [validatedRequest, isSingleUserMode],
-    async (request, response) => {
-      try {
-        const { chatId } = reqBody(request);
-        if (!chatId)
-          return response
-            .status(400)
-            .json({ success: false, error: "chatId is required." });
-
-        const service = new TelegramBotService();
-        await service.revokeExistingUser(chatId);
-        await EventLogs.logEvent("telegram_user_revoked", { chatId });
-        return response.status(200).json({ success: true });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    wrap(async (req, res) => {
+      const id = tenantId(req),
+        row = await Connector.get("telegram", id);
+      const binding = row?.config.approved_users?.find(
+        (u) => String(u.chatId) === String(req.body.chatId)
+      );
+      if (
+        !binding ||
+        (req.ep.identity !== "platform" &&
+          req.ep.role !== "admin" &&
+          binding.userId !== req.ep.userId)
+      )
+        throw fail(404, "Binding not found");
+      const service = new TelegramBotService(id);
+      service.abortChat(Number(req.body.chatId));
+      await service.revokeExistingUser(req.body.chatId);
+      res.json({ success: true });
+    })
   );
-
   app.post(
     "/telegram/update-config",
-    [validatedRequest, isSingleUserMode],
-    async (request, response) => {
-      try {
-        const { voice_response_mode } = reqBody(request);
-        const updates = {};
-
-        if (
-          voice_response_mode &&
-          ["text_only", "mirror", "always_voice"].includes(voice_response_mode)
-        ) {
-          updates.voice_response_mode = voice_response_mode;
-        }
-
-        if (Object.keys(updates).length === 0) {
-          return response
-            .status(400)
-            .json({ success: false, error: "No valid updates provided." });
-        }
-
-        const { error } = await ExternalCommunicationConnector.updateConfig(
-          "telegram",
-          updates
-        );
-        if (error) {
-          return response.status(500).json({ success: false, error });
-        }
-
-        // Update the running bot's config so changes take effect immediately
-        const service = new TelegramBotService();
-        if (service.isRunning) service.updateConfig(updates);
-
-        return response.status(200).json({ success: true });
-      } catch (e) {
-        console.error(e.message, e);
-        response.sendStatus(500);
-      }
-    }
+    authenticate,
+    manager,
+    wrap(async (req, res) => {
+      const id = tenantId(req),
+        mode = req.body.voice_response_mode;
+      if (!["text_only", "mirror", "always_voice"].includes(mode))
+        throw fail(400, "Invalid voice mode");
+      await Connector.updateConfig(
+        "telegram",
+        { voice_response_mode: mode },
+        id
+      );
+      new TelegramBotService(id).updateConfig({ voice_response_mode: mode });
+      res.json({ success: true });
+    })
   );
 }
-
 module.exports = { telegramEndpoints };

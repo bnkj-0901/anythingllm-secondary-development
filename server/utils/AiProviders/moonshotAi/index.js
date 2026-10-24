@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -13,19 +17,19 @@ const {
 
 class MoonshotAiLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.MOONSHOT_AI_API_KEY)
+    if (!env.MOONSHOT_AI_API_KEY)
       throw new Error("No Moonshot AI API key was set.");
     this.className = "MoonshotAiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.moonshot.ai/v1",
-      apiKey: process.env.MOONSHOT_AI_API_KEY,
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.moonshot.ai/v1",
+        apiKey: env.MOONSHOT_AI_API_KEY,
+      })
+    );
     this.model =
-      modelPreference ||
-      process.env.MOONSHOT_AI_MODEL_PREF ||
-      "moonshot-v1-32k";
+      modelPreference || env.MOONSHOT_AI_MODEL_PREF || "moonshot-v1-32k";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

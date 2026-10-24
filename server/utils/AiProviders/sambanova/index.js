@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { isAbortError } = require("../../helpers/abortSignals");
 const {
@@ -16,16 +20,18 @@ const {
 
 class SambaNovaLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.SAMBANOVA_LLM_API_KEY)
+    if (!env.SAMBANOVA_LLM_API_KEY)
       throw new Error("No SambaNova API key was set.");
     this.className = "SambaNovaLLM";
     const { OpenAI: OpenAIApi } = require("openai");
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.sambanova.ai/v1",
-      apiKey: process.env.SAMBANOVA_LLM_API_KEY,
-    });
-    this.model = modelPreference || process.env.SAMBANOVA_LLM_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.sambanova.ai/v1",
+        apiKey: env.SAMBANOVA_LLM_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.SAMBANOVA_LLM_MODEL_PREF;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

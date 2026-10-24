@@ -28,7 +28,8 @@ const {
 } = require("./utils/media");
 
 class TelegramBotService {
-  static _instance = null;
+  static _instances = new Map();
+  tenantId = null;
   static #MAX_POLLING_RETRIES = 10;
   static #BASE_RETRY_DELAY_MS = 1000;
   static #MAX_RETRY_DELAY_MS = 5 * 60 * 1000; // 5 minutes
@@ -71,7 +72,7 @@ class TelegramBotService {
   #config = null;
   #queue = new MessageQueue();
   #pollingRetry = { timer: null, count: 0 };
-  // Per-chat state: { workspaceSlug, threadSlug }
+  // Per-chat state for the bound employee's personal conversation.
   #chatState = new Map();
   // Pending pairing requests: chatId -> { code, telegramUsername, firstName }
   #pendingPairings = new Map();
@@ -80,9 +81,12 @@ class TelegramBotService {
   // Pending tool approval requests: requestId -> { worker, chatId, messageId }
   #pendingToolApprovals = new Map();
 
-  constructor() {
-    if (TelegramBotService._instance) return TelegramBotService._instance;
-    TelegramBotService._instance = this;
+  constructor(tenantId) {
+    if (!tenantId) throw new Error("Telegram requires an enterprise identity");
+    if (TelegramBotService._instances.has(tenantId))
+      return TelegramBotService._instances.get(tenantId);
+    this.tenantId = tenantId;
+    TelegramBotService._instances.set(tenantId, this);
   }
 
   get isRunning() {
@@ -102,8 +106,13 @@ class TelegramBotService {
   }
 
   async start(config) {
+    const tenant = await require("../prisma").ep_tenants.findUnique({
+      where: { id: this.tenantId },
+    });
+    if (!tenant || tenant.status !== "active")
+      throw new Error("企业已停用或不存在");
     if (this.#bot) await this.stop();
-    this.#config = config;
+    this.#config = { ...config, tenantId: this.tenantId };
 
     // Clear pending updates on startup, keeping only the last message per chat
     // This prevents processing a backlog of messages when the bot restarts.
@@ -113,9 +122,8 @@ class TelegramBotService {
 
     // Restore per-user workspace/thread state from saved config
     for (const user of config.approved_users || []) {
-      if (user.active_workspace) {
+      if (user.active_thread) {
         this.#chatState.set(Number(user.chatId), {
-          workspaceSlug: user.active_workspace,
           threadSlug: user.active_thread || null,
         });
       }
@@ -133,7 +141,7 @@ class TelegramBotService {
       const ctx = this.#createContext();
       for (const [chatId, msg] of lastMessages) {
         if (!isVerified(this.#config.approved_users, chatId)) continue;
-        this.#processPendingMessage(ctx, msg);
+        await this.#processPendingMessage(ctx, msg);
       }
     }
   }
@@ -142,7 +150,17 @@ class TelegramBotService {
    * Process a single pending message from startup.
    * Handles both commands and regular messages.
    */
-  #processPendingMessage(ctx, msg) {
+  async #processPendingMessage(ctx, msg) {
+    if (
+      msg.chat?.type !== "private" ||
+      String(msg.from?.id) !== String(msg.chat.id)
+    )
+      return;
+    try {
+      await this.identity(msg.chat.id);
+    } catch {
+      return;
+    }
     const text = msg.text || "";
 
     // Handle commands
@@ -154,22 +172,13 @@ class TelegramBotService {
       const command = BOT_COMMANDS.find((c) => c.command === commandName);
       if (command) {
         const handler = command.initHandler();
-        handler(ctx, msg.chat.id, text);
+        await handler(ctx, msg.chat.id, text);
         return;
       }
     }
 
     // Handle regular messages
-    this.#handleMessage(ctx, msg);
-  }
-
-  /**
-   * Check if the instance is running in multi-user mode
-   * @returns {Promise<boolean>}
-   */
-  async checkMultiUserMode() {
-    const { SystemSettings } = require("../../models/systemSettings");
-    return await SystemSettings.isMultiUserMode();
+    await this.#handleMessage(ctx, msg);
   }
 
   updateConfig(updates) {
@@ -218,7 +227,7 @@ class TelegramBotService {
   async #selfCleanup(reason) {
     this.#log(`Self-cleanup triggered: ${reason}`);
     await this.stop();
-    await ExternalCommunicationConnector.delete("telegram");
+    await ExternalCommunicationConnector.delete("telegram", this.tenantId);
     this.#log("Connector deleted due to invalid token");
   }
 
@@ -352,7 +361,6 @@ class TelegramBotService {
   #getState(chatId) {
     if (!this.#chatState.has(chatId)) {
       this.#chatState.set(chatId, {
-        workspaceSlug: this.#config.default_workspace,
         threadSlug: null,
       });
     }
@@ -362,24 +370,23 @@ class TelegramBotService {
   #setState(chatId, updates) {
     const state = this.#getState(chatId);
     Object.assign(state, updates);
-    this.#persistChatState(chatId, state);
+    this.#persistChatState(chatId, state).catch((error) =>
+      this.#log("Conversation state save failed:", error.message)
+    );
   }
 
   async #persistChatState(chatId, state) {
-    const approved = (this.#config.approved_users || []).map((u) => {
-      if (String(u.chatId) === String(chatId)) {
-        return {
-          ...u,
-          active_workspace: state.workspaceSlug,
-          active_thread: state.threadSlug,
-        };
-      }
-      return u;
-    });
-    this.#config.approved_users = approved;
-    await ExternalCommunicationConnector.updateConfig("telegram", {
-      approved_users: approved,
-    });
+    await ExternalCommunicationConnector.updateConfig(
+      "telegram",
+      (current) => ({
+        approved_users: (current.approved_users || []).map((user) =>
+          String(user.chatId) === String(chatId)
+            ? { ...user, active_thread: state.threadSlug }
+            : user
+        ),
+      }),
+      this.tenantId
+    );
   }
 
   /**
@@ -390,14 +397,22 @@ class TelegramBotService {
     return {
       bot: this.#bot,
       config: this.#config,
+      identity: (chatId) => this.identity(chatId),
       getState: (chatId) => this.#getState(chatId),
       setState: (chatId, updates) => this.#setState(chatId, updates),
       log: (text, ...args) => this.#log(text, ...args),
     };
   }
 
-  async approvePendingUser(chatId) {
-    await approveUser(this.#bot, chatId, this.#config, this.#pendingPairings);
+  async approvePendingUser(chatId, userId, code) {
+    await approveUser(
+      this.#bot,
+      chatId,
+      this.#config,
+      this.#pendingPairings,
+      userId,
+      code
+    );
   }
 
   async denyPendingUser(chatId) {
@@ -405,7 +420,7 @@ class TelegramBotService {
   }
 
   async revokeExistingUser(chatId) {
-    await revokeUser(chatId, this.#config);
+    await revokeUser(chatId, this.#config || { tenantId: this.tenantId });
   }
 
   /**
@@ -415,16 +430,30 @@ class TelegramBotService {
    * - Returns false if the bot is running in multi-user mode.
    * @returns {Promise<boolean>}
    */
-  async #assertSingleUserMode() {
-    const isMultiUserMode = await this.checkMultiUserMode();
-    if (!isMultiUserMode) return true;
-
-    this.#log(
-      "Invalid state: Multi-user mode detected. Cleaning up and deleting connector."
-    );
+  async #assertActiveTenant() {
+    const tenant = await require("../../utils/prisma").ep_tenants.findFirst({
+      where: { id: this.tenantId, status: "active" },
+    });
+    if (tenant) return true;
     await this.stop();
-    await ExternalCommunicationConnector.delete("telegram");
     return false;
+  }
+  async identity(chatId) {
+    if (!(await this.#assertActiveTenant()))
+      throw new Error("Enterprise is disabled");
+    const connector = await ExternalCommunicationConnector.get(
+      "telegram",
+      this.tenantId
+    );
+    if (!connector?.active)
+      throw new Error("Telegram connection is unavailable");
+    const binding = (connector.config.approved_users || []).find(
+      (u) => String(u.chatId) === String(chatId)
+    );
+    const ctx = await require("../../enterprise/auth").context(binding?.userId);
+    if (ctx.tenantId !== this.tenantId)
+      throw new Error("Invalid Telegram account binding");
+    return ctx;
   }
 
   /**
@@ -442,14 +471,26 @@ class TelegramBotService {
       if (!this.#config) return;
       this.#resetPollingRetry(); // Reset the polling on successful message receipt
 
+      if (msg.chat?.type !== "private") return;
+      if (!(await this.#assertActiveTenant())) return;
       if (!isVerified(this.#config.approved_users, msg.chat.id)) {
-        sendPairingRequest(this.#bot, msg, this.#pendingPairings);
+        try {
+          await sendPairingRequest(this.#bot, msg, this.#pendingPairings);
+        } catch (error) {
+          this.#log("Pairing reply failed:", error.message);
+        }
         return;
       }
 
-      const isSingleUserMode = await this.#assertSingleUserMode();
-      if (!isSingleUserMode) return;
-      handler();
+      try {
+        await this.identity(msg.chat.id);
+        await handler();
+      } catch {
+        await this.#bot?.sendMessage(
+          msg.chat.id,
+          "Your enterprise account is unavailable. Sign in and pair again."
+        );
+      }
     };
 
     // Register all commands (history is registered separately below)
@@ -467,20 +508,22 @@ class TelegramBotService {
       const handler = BOT_COMMANDS.find(
         (c) => c.command === "history"
       ).initHandler();
-      guard(msg, () => handler(ctx, msg.chat.id, msg.text));
+      return guard(msg, () => handler(ctx, msg.chat.id, msg.text));
     });
 
     // Register callback queries, used for workspace/thread selection, tool approval, etc.
     this.#bot.on("callback_query", (query) =>
-      handleKeyboardQueryCallback(ctx, query, {
-        pendingToolApprovals: this.#pendingToolApprovals,
-        log: this.#log.bind(this),
-      })
+      guard(query.message, () =>
+        handleKeyboardQueryCallback(ctx, query, {
+          pendingToolApprovals: this.#pendingToolApprovals,
+          log: this.#log.bind(this),
+        })
+      )
     );
 
     this.#bot.on("message", (msg) => {
       if (msg.text?.startsWith("/")) return;
-      guard(msg, () => this.#handleMessage(ctx, msg));
+      return guard(msg, () => this.#handleMessage(ctx, msg));
     });
 
     this.#bot.on("polling_error", (error) => {
@@ -491,6 +534,15 @@ class TelegramBotService {
   async #runChatJob(ctx, chatId, payload) {
     const state = this.#getState(chatId);
     try {
+      const execution = await this.identity(chatId);
+      const { ChatThread } = require("../../models/workspaceThread");
+      let thread = state.threadSlug
+        ? await ChatThread.get(execution, { id: state.threadSlug })
+        : null;
+      if (!thread) {
+        ({ thread } = await ChatThread.new(execution));
+        this.#setState(chatId, { threadSlug: thread.id });
+      }
       const bgService = new BackgroundService();
       const jobId = `handle-telegram-chat-${Date.now()}`;
       let invocationUuid = null;
@@ -511,8 +563,9 @@ class TelegramBotService {
         worker.send({
           botToken: this.#config.bot_token,
           chatId,
-          workspaceSlug: state.workspaceSlug,
-          threadSlug: state.threadSlug,
+          tenantId: this.tenantId,
+          userId: execution.userId,
+          conversationId: thread.id,
           ...payload,
         });
       }
@@ -609,6 +662,9 @@ class TelegramBotService {
     );
 
     try {
+      await this.identity(chatId);
+      if (this.#activeWorkers.get(Number(chatId))?.worker !== worker)
+        throw new Error("Telegram worker is no longer active");
       const payloadText =
         payload && Object.keys(payload).length > 0
           ? `\n\n<b>Parameters:</b>\n<code>${JSON.stringify(payload, null, 2)}</code>`
@@ -803,7 +859,12 @@ class TelegramBotService {
     try {
       const bot = new TelegramBot(token, { polling: false });
       const me = await bot.getMe();
-      return { valid: true, username: me.username, error: null };
+      return {
+        valid: true,
+        username: me.username,
+        botId: String(me.id),
+        error: null,
+      };
     } catch (error) {
       return { valid: false, username: null, error: error.message };
     }
@@ -816,27 +877,26 @@ class TelegramBotService {
    * @returns {Promise<void>}
    */
   static async bootIfActive() {
-    const service = new TelegramBotService();
-    try {
-      const connector = await ExternalCommunicationConnector.get("telegram");
-      if (!connector || !connector.active || !connector.config?.bot_token)
-        return;
-
-      // If there is a valid config, but the instance is running in multi-user mode - skip boot
-      // but also cleanup the config and approved users
-      const isSingleUserMode = await service.#assertSingleUserMode();
-      if (!isSingleUserMode) return;
-
-      const config = { ...connector.config };
-      config.bot_token = decryptToken(config.bot_token);
-      if (!config.bot_token) {
-        service.#log("Failed to decrypt bot token. Re-connect to fix.");
-        return;
+    const connectors =
+      await require("../../utils/prisma").external_communication_connectors.findMany(
+        { where: { type: "telegram", active: true } }
+      );
+    for (const row of connectors) {
+      const service = new TelegramBotService(row.tenantId);
+      try {
+        if (!(await service.#assertActiveTenant())) continue;
+        const connector = await ExternalCommunicationConnector.get(
+          "telegram",
+          row.tenantId
+        );
+        const config = {
+          ...connector.config,
+          bot_token: decryptToken(connector.config.bot_token),
+        };
+        if (config.bot_token) await service.start(config);
+      } catch {
+        service.#log("Could not start enterprise Telegram connection");
       }
-
-      await service.start(config);
-    } catch (error) {
-      service.#log("Failed to boot:", error.message);
     }
   }
 }

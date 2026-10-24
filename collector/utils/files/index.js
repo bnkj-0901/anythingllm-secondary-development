@@ -123,6 +123,9 @@ function writeToServerDocuments({
   destinationOverride = null,
   options = {},
 }) {
+  // The authenticated SaaS API owns tenant storage and publication. Its parser
+  // requests the original extraction result without writing a global copy.
+  if (options.returnDocuments === true) return data;
   if (!filename) throw new Error("Filename is required!");
 
   let destination = null;

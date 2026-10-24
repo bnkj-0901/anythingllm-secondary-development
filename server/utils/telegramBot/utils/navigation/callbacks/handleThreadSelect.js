@@ -1,8 +1,7 @@
-const { Workspace } = require("../../../../../models/workspace");
-const { WorkspaceThread } = require("../../../../../models/workspaceThread");
+const { ChatThread } = require("../../../../../models/workspaceThread");
 
 /**
- * Handle thread selection - sets active workspace and thread.
+ * Select or create the bound employee's personal conversation.
  * @param {object} params
  * @param {import("../../commands/index").BotContext} params.ctx
  * @param {number} params.chatId
@@ -10,34 +9,15 @@ const { WorkspaceThread } = require("../../../../../models/workspaceThread");
  * @param {string} params.data
  */
 async function handleThreadSelect({ ctx, chatId, query, data } = {}) {
-  const parts = data.slice(3).split(":");
-  const workspaceId = parseInt(parts[0], 10);
-  const threadId = parseInt(parts[1], 10);
-
-  const workspace = await Workspace.get({ id: workspaceId });
-  if (!workspace) {
-    await ctx.bot.answerCallbackQuery(query.id, {
-      text: "Workspace not found.",
-    });
-    return;
-  }
-
-  let threadSlug = null;
-  let threadName = "Default";
-  if (threadId !== 0) {
-    const thread = await WorkspaceThread.get({ id: threadId });
-    if (thread) {
-      threadSlug = thread.slug;
-      threadName = thread.name;
-    }
-  }
-
-  ctx.setState(chatId, { workspaceSlug: workspace.slug, threadSlug });
-  await ctx.bot.answerCallbackQuery(query.id, { text: "Switched!" });
-  await ctx.bot.sendMessage(
-    chatId,
-    `Switched to "${workspace.name}" → ${threadName}`
-  );
+  const identity = await ctx.identity(chatId);
+  let thread;
+  if (data === "th:new") ({ thread } = await ChatThread.new(identity));
+  else thread = await ChatThread.get(identity, { id: Number(data.slice(3)) });
+  if (!thread) throw new Error("Conversation not found");
+  ctx.setState(chatId, { threadSlug: thread.id });
+  await ctx.bot.answerCallbackQuery(query.id, {
+    text: "Conversation selected",
+  });
 }
 
 module.exports = { handleThreadSelect };

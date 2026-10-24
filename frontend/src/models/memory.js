@@ -19,14 +19,12 @@ const Memory = {
    * @param {string} slug
    * @returns {Promise<{global: Memory[], workspace: Memory[]}>}
    */
-  forWorkspace: async function (slug) {
-    return await fetch(`${API_BASE}/workspaces/${slug}/memories`, {
-      method: "GET",
+  forUser: async function () {
+    const response = await fetch(`${API_BASE}/memories`, {
       headers: baseHeaders(),
-    })
-      .then((res) => res.json())
-      .then((res) => res?.memories || { global: [], workspace: [] })
-      .catch(() => ({ global: [], workspace: [] }));
+    });
+    if (!response.ok) throw new Error("Unable to load memories");
+    return (await response.json()).memories || [];
   },
 
   /**
@@ -35,11 +33,11 @@ const Memory = {
    * @param {{content: string, scope?: "workspace"|"global"}} body
    * @returns {Promise<{memory: Memory|null, error?: string}>}
    */
-  create: async function (slug, { content, scope = "workspace" }) {
-    return await fetch(`${API_BASE}/workspaces/${slug}/memories`, {
+  create: async function ({ content }) {
+    return await fetch(`${API_BASE}/memories`, {
       method: "POST",
       headers: baseHeaders(),
-      body: JSON.stringify({ content, scope }),
+      body: JSON.stringify({ content }),
     })
       .then((res) => res.json())
       .catch((e) => ({ memory: null, error: e.message }));
@@ -73,35 +71,6 @@ const Memory = {
     })
       .then((res) => res.json())
       .catch((e) => ({ success: false, error: e.message }));
-  },
-
-  /**
-   * Promote a workspace-scoped memory to global.
-   * @param {number} memoryId
-   * @returns {Promise<{memory: Memory|null, error?: string}>}
-   */
-  promoteToGlobal: async function (memoryId) {
-    return await fetch(`${API_BASE}/memories/${memoryId}/promote`, {
-      method: "POST",
-      headers: baseHeaders(),
-    })
-      .then((res) => res.json())
-      .catch((e) => ({ memory: null, error: e.message }));
-  },
-
-  /**
-   * Demote a global memory to a specific workspace.
-   * @param {number} memoryId
-   * @param {string} slug
-   * @returns {Promise<{memory: Memory|null, error?: string}>}
-   */
-  demoteToWorkspace: async function (memoryId, slug) {
-    return await fetch(`${API_BASE}/memories/${memoryId}/demote/${slug}`, {
-      method: "POST",
-      headers: baseHeaders(),
-    })
-      .then((res) => res.json())
-      .catch((e) => ({ memory: null, error: e.message }));
   },
 };
 

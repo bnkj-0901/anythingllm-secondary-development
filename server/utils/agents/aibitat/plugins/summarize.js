@@ -72,9 +72,11 @@ const docSummarizer = {
               this.super.introspect(
                 `${this.caller}: Looking at the available documents.`
               );
-              const documents = await Document.where({
-                workspaceId: this.super.handlerProps.invocation.workspace_id,
-              });
+              const ctx =
+                await require("../../../../enterprise/execution-context").loadExecutionContext(
+                  this.super.handlerProps.ctx
+                );
+              const documents = await Document.where(ctx, { status: "ready" });
               if (documents.length === 0)
                 return "No documents found - nothing can be done. Stop.";
 
@@ -84,8 +86,8 @@ const docSummarizer = {
               const foundDocuments = documents.map((doc) => {
                 const metadata = safeJsonParse(doc.metadata, {});
                 return {
-                  document_id: doc.docId,
-                  filename: metadata?.title ?? "unknown.txt",
+                  document_id: doc.id,
+                  filename: doc.title,
                   description: metadata?.description ?? "no description",
                 };
               });
@@ -122,7 +124,11 @@ const docSummarizer = {
                 return `No available document by the name "${filename}".`;
               }
 
-              const document = await Document.content(docInfo.document_id);
+              const ctx =
+                await require("../../../../enterprise/execution-context").loadExecutionContext(
+                  this.super.handlerProps.ctx
+                );
+              const document = await Document.content(ctx, docInfo.document_id);
               this.super.introspect(
                 `${this.caller}: Grabbing all content for ${
                   filename ?? "a discovered file."

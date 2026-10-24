@@ -7,6 +7,7 @@ networks:
 services:
   anything-llm:
     container_name: anythingllm
+    image: anythingllm-secondary-development:local
     build:
       context: ../.
       dockerfile: ./docker/Dockerfile
@@ -17,14 +18,16 @@ services:
       - SYS_ADMIN
     volumes:
       - "./.env:/app/server/.env"
-      - "../server/storage:/app/server/storage"
+      - "${SERVER_STORAGE_PATH:-../server/storage}:/app/server/storage"
       - "../collector/hotdir/:/app/collector/hotdir"
       - "../collector/outputs/:/app/collector/outputs"
     user: "${UID:-1000}:${GID:-1000}"
     ports:
-      - "3001:3001"
+      - "${APP_PORT:-3000}:3001"
     env_file:
       - .env
+    environment:
+      DATABASE_URL: ${DATABASE_URL:?Set PostgreSQL DATABASE_URL in docker/.env}
     networks:
       - anything-llm
     extra_hosts:

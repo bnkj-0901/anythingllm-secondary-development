@@ -1,6 +1,5 @@
-const { Workspace } = require("../../../../../models/workspace");
-const { WorkspaceThread } = require("../../../../../models/workspaceThread");
-const { WorkspaceChats } = require("../../../../../models/workspaceChats");
+const { ChatThread } = require("../../../../../models/workspaceThread");
+const { Chat } = require("../../../../../models/workspaceChats");
 
 const SOURCES_PER_PAGE = 6;
 
@@ -43,18 +42,14 @@ function truncateText(text, maxLength = 30) {
  * @param {number|null} threadId
  * @returns {Promise<{sources: object[], text: string}|null>}
  */
-async function getLastAssistantMessage(workspaceId, threadId) {
-  const chat = await WorkspaceChats.get(
-    {
-      workspaceId,
-      user_id: null,
-      thread_id: threadId || null,
-      api_session_id: null,
+async function getLastAssistantMessage(ctx, threadId) {
+  const chat = (
+    await Chat.forThread(ctx, threadId, {
+      limit: 1,
+      orderBy: { id: "desc" },
       include: true,
-    },
-    1,
-    { id: "desc" }
-  );
+    })
+  )[0];
 
   if (!chat) return null;
 
@@ -122,20 +117,19 @@ function buildSourcesMenu(sources, page = 0) {
  */
 async function showSourcesMenu(ctx, chatId, page = 0, messageId = null) {
   const state = ctx.getState(chatId);
-  const workspace = await Workspace.get({ slug: state.workspaceSlug });
-  if (!workspace) {
-    await ctx.bot.sendMessage(chatId, "No workspace configured.");
-    return;
-  }
-
+  const identity = await ctx.identity(chatId);
   const thread = state.threadSlug
-    ? await WorkspaceThread.get({ slug: state.threadSlug })
+    ? await ChatThread.get(identity, { id: state.threadSlug })
     : null;
-
-  const lastMessage = await getLastAssistantMessage(
-    workspace.id,
-    thread?.id || null
-  );
+  const lastMessage = thread
+    ? await getLastAssistantMessage(identity, thread.id)
+    : null;
+  if (lastMessage)
+    lastMessage.sources =
+      await require("../../../../../enterprise/rag").currentSources(
+        identity,
+        lastMessage.sources
+      );
 
   if (!lastMessage) {
     const text = "There are no citations for the previous reply.";

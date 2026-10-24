@@ -1,24 +1,61 @@
-const { v4: uuidv4 } = require("uuid");
-const { getVectorDbClass } = require("../utils/helpers");
 const prisma = require("../utils/prisma");
-const { Telemetry } = require("./telemetry");
-const { EventLogs } = require("./eventLogs");
 const { safeJsonParse } = require("../utils/http");
-const { getModelTag } = require("../endpoints/utils");
+
+function identity(ctx) {
+  if (ctx?.identity === "platform" && typeof ctx.userId === "string" && ctx.userId) return;
+  if (
+    typeof ctx?.tenantId !== "string" ||
+    !ctx.tenantId ||
+    !Number.isInteger(ctx?.userId) ||
+    ctx.userId < 1 ||
+    ctx.identity === "platform"
+  )
+    throw Object.assign(new Error("知识操作需要企业用户身份"), { status: 403 });
+}
+
+// One resource policy for file uploads, natural-language entries and retrieval.
+// Future shared-library grants extend this policy without changing user tenancy.
+function libraryScope(ctx) {
+  identity(ctx);
+  if (ctx.identity === "platform") return {};
+  return {
+    grants: {
+      some: { OR: [{ tenantId: ctx.tenantId }, { userId: ctx.userId }] },
+    },
+  };
+}
+
+function libraryAccessSQL(alias = "l", firstParameter = 1) {
+  return `EXISTS (SELECT 1 FROM ep_library_grants g WHERE g."libraryId"=${alias}.id AND (g."tenantId"=$${firstParameter} OR g."userId"=$${firstParameter + 1}))`;
+}
+
+function libraryVisibilitySQL(alias = "l", tenantParameter = 1) {
+  return `CASE WHEN EXISTS (SELECT 1 FROM ep_library_grants vg WHERE vg."libraryId"=${alias}.id AND vg."tenantId"=$${tenantParameter}) THEN 'public' ELSE 'private' END`;
+}
+
+function scope(ctx, clause = {}) {
+  identity(ctx);
+  return {
+    AND: [clause, { library: libraryScope(ctx) }],
+  };
+}
 
 const Document = {
-  writable: ["pinned", "watched", "lastUpdatedAt"],
-  /**
-   * @param {import("@prisma/client").workspace_documents} document - Document PrismaRecord
-   * @returns {{
-   *  metadata: (null|object),
-   *  type: import("./documentSyncQueue.js").validFileType,
-   *  source: string
-   * }}
-   */
+  writable: [
+    "title",
+    "content",
+    "inputType",
+    "originalPath",
+    "status",
+    "error",
+    "version",
+    "embeddingId",
+    "updatedAt",
+    "pinned",
+  ],
   parseDocumentTypeAndSource: function (document) {
     const metadata = safeJsonParse(document.metadata, null);
-    if (!metadata) return { metadata: null, type: null, source: null };
+    if (!metadata || typeof metadata.chunkSource !== "string") return { metadata: null, type: null, source: null };
 
     // Parse the correct type of source and its original source path.
     const idx = metadata.chunkSource.indexOf("://");
@@ -29,276 +66,77 @@ const Document = {
     return { metadata, type, source: this._stripSource(source, type) };
   },
 
-  forWorkspace: async function (workspaceId = null) {
-    if (!workspaceId) return [];
-    return await prisma.workspace_documents.findMany({
-      where: { workspaceId },
-    });
-  },
-
-  delete: async function (clause = {}) {
-    try {
-      await prisma.workspace_documents.deleteMany({ where: clause });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-
-  get: async function (clause = {}) {
-    try {
-      const document = await prisma.workspace_documents.findFirst({
-        where: clause,
+  libraryScope,
+  libraryAccessSQL,
+  libraryVisibilitySQL,
+  async pinnedContext(ctx, maxTokens = Number.POSITIVE_INFINITY, db = prisma) {
+    const documents = await this.where(ctx, { pinned: true, status: "ready" }, {
+      orderBy: { createdAt: "asc" },
+    }, db);
+    const { TokenManager } = require("../utils/helpers/tiktoken");
+    const tokenizer = new TokenManager();
+    let tokens = 0;
+    const pinned = [];
+    for (const document of documents) {
+      if (tokens >= maxTokens) continue;
+      const metadata = safeJsonParse(document.metadata, {});
+      pinned.push({
+        ...metadata,
+        id: document.id,
+        documentId: document.id,
+        libraryId: document.libraryId,
+        tenantId: document.tenantId,
+        version: document.version,
+        title: document.title,
+        pageContent: document.content,
       });
-      return document || null;
-    } catch (error) {
-      console.error(error.message);
-      return null;
+      tokens += tokenizer.countFromString(document.content || "");
     }
+    return pinned;
   },
-
-  where: async function (
-    clause = {},
-    limit = null,
-    orderBy = null,
-    include = null,
-    select = null
-  ) {
-    try {
-      const results = await prisma.workspace_documents.findMany({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : {}),
-        ...(include !== null ? { include } : {}),
-        ...(select !== null ? { select: { ...select } } : {}),
-      });
-      return results;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+  async get(ctx, clause = {}, db = prisma) {
+    return db.documents.findFirst({ where: scope(ctx, clause) });
   },
-
-  addDocuments: async function (workspace, additions = [], userId = null) {
-    const VectorDb = getVectorDbClass();
-    if (additions.length === 0) return { failed: [], embedded: [] };
-    const { fileData } = require("../utils/files");
-    const { emitProgress } = require("../utils/EmbeddingWorkerManager");
-    const embedded = [];
-    const failedToEmbed = [];
-    const errors = new Set();
-
-    emitProgress(workspace.slug, {
-      type: "batch_starting",
-      workspaceSlug: workspace.slug,
-      userId,
-      filenames: additions,
-      totalDocs: additions.length,
+  async where(ctx, clause = {}, options = {}, db = prisma) {
+    return db.documents.findMany({ ...options, where: scope(ctx, clause) });
+  },
+  async count(ctx, clause = {}, db = prisma) {
+    return db.documents.count({ where: scope(ctx, clause) });
+  },
+  async new(ctx, data, db = prisma) {
+    identity(ctx);
+    const library = await db.ep_libraries.findFirst({
+      where: { AND: [libraryScope(ctx), { id: data.libraryId }] },
     });
-
-    for (const [index, path] of additions.entries()) {
-      const docProgress = {
-        workspaceSlug: workspace.slug,
-        userId,
-        filename: path,
-        docIndex: index,
-        totalDocs: additions.length,
-      };
-
-      const data = await fileData(path);
-      if (!data) {
-        emitProgress(workspace.slug, {
-          type: "doc_failed",
-          ...docProgress,
-          error: "Failed to load file data",
-        });
-        continue;
-      }
-
-      const docId = uuidv4();
-      const { pageContent: _pageContent, ...metadata } = data;
-      const newDoc = {
-        docId,
-        filename: path.split(/[/\\]/).pop(),
-        docpath: path,
-        workspaceId: workspace.id,
-        metadata: JSON.stringify(metadata),
-      };
-
-      emitProgress(workspace.slug, { type: "doc_starting", ...docProgress });
-
-      global.__embeddingProgress = {
-        workspaceSlug: workspace.slug,
-        filename: path,
-        userId,
-      };
-
-      const { vectorized, error } = await VectorDb.addDocumentToNamespace(
-        workspace.slug,
-        { ...data, docId },
-        path
-      );
-
-      if (!vectorized) {
-        console.error(
-          "Failed to vectorize",
-          metadata?.title || newDoc.filename
-        );
-        failedToEmbed.push(metadata?.title || newDoc.filename);
-        errors.add(error);
-        emitProgress(workspace.slug, {
-          type: "doc_failed",
-          ...docProgress,
-          error: error || "Unknown error",
-        });
-        continue;
-      }
-
-      try {
-        await prisma.workspace_documents.create({ data: newDoc });
-        embedded.push(path);
-        emitProgress(workspace.slug, {
-          type: "doc_complete",
-          ...docProgress,
-        });
-      } catch (error) {
-        console.error(error.message);
-        emitProgress(workspace.slug, {
-          type: "doc_failed",
-          ...docProgress,
-          error: "Failed to save document record",
-        });
-      }
-    }
-
-    global.__embeddingProgress = null;
-
-    emitProgress(workspace.slug, {
-      type: "all_complete",
-      workspaceSlug: workspace.slug,
-      userId,
-      totalDocs: additions.length,
-      embedded: embedded.length,
-      failed: failedToEmbed.length,
-    });
-
-    await Telemetry.sendTelemetry("documents_embedded_in_workspace", {
-      LLMSelection: process.env.LLM_PROVIDER || "openai",
-      Embedder: process.env.EMBEDDING_ENGINE || "inherit",
-      VectorDbSelection: process.env.VECTOR_DB || "lancedb",
-      TTSSelection: process.env.TTS_PROVIDER || "native",
-      LLMModel: getModelTag(),
-    });
-    await EventLogs.logEvent(
-      "workspace_documents_added",
-      {
-        workspaceName: workspace?.name || "Unknown Workspace",
-        numberOfDocumentsAdded: additions.length,
+    if (!library)
+      throw Object.assign(new Error("知识库不存在或无权访问"), { status: 404 });
+    return db.documents.create({
+      data: {
+        ...data,
+        tenantId: library.tenantId,
+        createdBy: String(ctx.userId),
+        updatedBy: String(ctx.userId),
       },
-      userId
+    });
+  },
+  async update(ctx, id, data = {}, db = prisma) {
+    const values = Object.fromEntries(
+      Object.entries(data).filter(([key]) => this.writable.includes(key))
     );
-    return { failedToEmbed, errors: Array.from(errors), embedded };
+    return db.documents.updateMany({
+      where: scope(ctx, { id }),
+      data: { ...values, updatedBy: String(ctx.userId) },
+    });
   },
-
-  removeDocuments: async function (workspace, removals = [], userId = null) {
-    const VectorDb = getVectorDbClass();
-    if (removals.length === 0) return;
-
-    for (const path of removals) {
-      const document = await this.get({
-        docpath: path,
-        workspaceId: workspace.id,
-      });
-      if (!document) continue;
-      await VectorDb.deleteDocumentFromNamespace(
-        workspace.slug,
-        document.docId
-      );
-
-      try {
-        await prisma.workspace_documents.delete({
-          where: { id: document.id, workspaceId: workspace.id },
-        });
-        await prisma.document_vectors.deleteMany({
-          where: { docId: document.docId },
-        });
-      } catch (error) {
-        console.error(error.message);
-      }
-    }
-
-    await EventLogs.logEvent(
-      "workspace_documents_removed",
-      {
-        workspaceName: workspace?.name || "Unknown Workspace",
-        numberOfDocuments: removals.length,
-      },
-      userId
-    );
-    return true;
+  async delete(ctx, clause = {}, db = prisma) {
+    return db.documents.deleteMany({ where: scope(ctx, clause) });
   },
-
-  count: async function (clause = {}, limit = null) {
-    try {
-      const count = await prisma.workspace_documents.count({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-      });
-      return count;
-    } catch (error) {
-      console.error("FAILED TO COUNT DOCUMENTS.", error.message);
-      return 0;
-    }
+  async content(ctx, id, db = prisma) {
+    const document = await this.get(ctx, { id }, db);
+    if (!document)
+      throw Object.assign(new Error("资料不存在或无权访问"), { status: 404 });
+    return { title: document.title, content: document.content };
   },
-  update: async function (id = null, data = {}) {
-    if (!id) throw new Error("No workspace document id provided for update");
-
-    const validKeys = Object.keys(data).filter((key) =>
-      this.writable.includes(key)
-    );
-    if (validKeys.length === 0)
-      return { document: { id }, message: "No valid fields to update!" };
-
-    try {
-      const document = await prisma.workspace_documents.update({
-        where: { id },
-        data,
-      });
-      return { document, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { document: null, message: error.message };
-    }
-  },
-  _updateAll: async function (clause = {}, data = {}) {
-    try {
-      await prisma.workspace_documents.updateMany({
-        where: clause,
-        data,
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-  content: async function (docId) {
-    if (!docId) throw new Error("No workspace docId provided!");
-    const document = await this.get({ docId: String(docId) });
-    if (!document) throw new Error(`Could not find a document by id ${docId}`);
-
-    const { fileData } = require("../utils/files");
-    const data = await fileData(document.docpath);
-    return { title: data.title, content: data.pageContent };
-  },
-  contentByDocPath: async function (docPath) {
-    const { fileData } = require("../utils/files");
-    const data = await fileData(docPath);
-    return { title: data.title, content: data.pageContent };
-  },
-
-  // Some data sources have encoded params in them we don't want to log - so strip those details.
   _stripSource: function (sourceString, type) {
     if (["confluence", "github"].includes(type)) {
       const _src = new URL(sourceString);
@@ -307,57 +145,6 @@ const Document = {
     }
 
     return sourceString;
-  },
-
-  /**
-   * Functions for the backend API endpoints - not to be used by the frontend or elsewhere.
-   * @namespace api
-   */
-  api: {
-    /**
-     * Process a document upload from the API and upsert it into the database. This
-     * functionality should only be used by the backend /v1/documents/upload endpoints for post-upload embedding.
-     * @param {string} wsSlugs - The slugs of the workspaces to embed the document into, will be comma-separated list of workspace slugs
-     * @param {string} docLocation - The location/path of the document that was uploaded
-     * @returns {Promise<boolean>} - True if the document was uploaded successfully, false otherwise
-     */
-    uploadToWorkspace: async function (wsSlugs = "", docLocation = null) {
-      if (!docLocation)
-        return console.log(
-          "No document location provided for embedding",
-          docLocation
-        );
-
-      const slugs = wsSlugs
-        .split(",")
-        .map((slug) => String(slug)?.trim()?.toLowerCase());
-      if (slugs.length === 0)
-        return console.log(`No workspaces provided got: ${wsSlugs}`);
-
-      const { Workspace } = require("./workspace");
-      const workspaces = await Workspace.where({ slug: { in: slugs } });
-      if (workspaces.length === 0)
-        return console.log("No valid workspaces found for slugs: ", slugs);
-
-      // Upsert the document into each workspace - do this sequentially
-      // because the document may be large and we don't want to overwhelm the embedder, plus on the first
-      // upsert we will then have the cache of the document - making n+1 embeds faster. If we parallelize this
-      // we will have to do a lot of extra work to ensure that the document is not embedded more than once.
-      for (const workspace of workspaces) {
-        const { failedToEmbed = [], errors = [] } = await Document.addDocuments(
-          workspace,
-          [docLocation]
-        );
-        if (failedToEmbed.length > 0)
-          return console.log(
-            `Failed to embed document into workspace ${workspace.slug}`,
-            errors
-          );
-        console.log(`Document embedded into workspace ${workspace.slug}...`);
-      }
-
-      return true;
-    },
   },
 };
 

@@ -3,11 +3,15 @@ import { FullScreenLoader } from "@/components/Preloader";
 import paths from "@/utils/paths";
 import useQuery from "@/hooks/useQuery";
 import System from "@/models/system";
-import { AUTH_TIMESTAMP, AUTH_TOKEN, AUTH_USER } from "@/utils/constants";
+import { clearSession, saveSession } from "@/models/platform";
 
 export default function SimpleSSOPassthrough() {
   const query = useQuery();
-  const redirectPath = query.get("redirectTo") || paths.home();
+  const requestedRedirect = query.get("redirectTo");
+  const redirectPath =
+    requestedRedirect?.startsWith("/") && !requestedRedirect.startsWith("//")
+      ? requestedRedirect
+      : paths.home();
   const [ready, setReady] = useState(false);
   const [error, setError] = useState(null);
 
@@ -15,18 +19,13 @@ export default function SimpleSSOPassthrough() {
     try {
       if (!query.get("token")) throw new Error("No token provided.");
 
-      // Clear any existing auth data
-      window.localStorage.removeItem(AUTH_USER);
-      window.localStorage.removeItem(AUTH_TOKEN);
-      window.localStorage.removeItem(AUTH_TIMESTAMP);
+      clearSession();
 
       System.simpleSSOLogin(query.get("token"))
         .then((res) => {
           if (!res.valid) throw new Error(res.message);
 
-          window.localStorage.setItem(AUTH_USER, JSON.stringify(res.user));
-          window.localStorage.setItem(AUTH_TOKEN, res.token);
-          window.localStorage.setItem(AUTH_TIMESTAMP, Number(new Date()));
+          saveSession(res.session);
           setReady(res.valid);
         })
         .catch((e) => {

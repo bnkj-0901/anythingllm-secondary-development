@@ -4,22 +4,139 @@
       <view class="knowledge-content">
         <view class="page-heading">
           <view class="page-heading__copy">
-            <text class="eyebrow">KNOWLEDGE</text>
             <text class="page-title">知识资料</text>
-            <text class="page-description"
-              >共同维护公有知识，也为自己保留一份私有经验。</text
-            >
           </view>
-          <wd-button
-            icon="add"
-            :round="false"
-            :disabled="!uploadLibraries.length"
-            custom-style="height:42px;border-radius:10px;background:#237b61;border-color:#237b61;font-size:14px;"
-            @click="openAdd"
-            >新增资料</wd-button
-          >
+          <view class="page-actions">
+            <view class="page-action">
+              <wd-button block plain @click="openLibrary">新建知识库</wd-button>
+            </view>
+            <view class="page-action">
+              <wd-button
+                block
+                icon="add"
+                :disabled="!uploadLibraries.length"
+                @click="openAdd"
+              >
+                新增资料
+              </wd-button>
+            </view>
+            <wd-button
+              type="icon"
+              icon="refresh"
+              aria-label="刷新知识资料"
+              :loading="loading"
+              :disabled="loading"
+              @click="refresh"
+            />
+          </view>
         </view>
+        <text v-if="error" class="form-error page-error" role="alert">{{ error }}</text>
 
+        <view v-if="changes.length" class="library-section">
+          <text class="section-label">{{
+            canReview ? "知识变更审批" : "我的变更申请"
+          }}</text>
+          <view
+            v-for="change in changes"
+            :key="change.id"
+            class="library-item knowledge-approval"
+          >
+            <view class="library-copy">
+              <text class="library-name"
+                >{{ changeTitle(change) }} ·
+                {{ changeStatusLabel(change.status) }}</text
+              >
+              <text class="library-description">{{
+                changeActionLabel(change.action)
+              }}</text>
+              <text v-if="change.title" class="library-description"
+                >申请名称：{{ change.title }}</text
+              >
+              <text v-if="change.visibility" class="library-description"
+                >申请授权范围：{{
+                  change.visibility === "public" ? "企业公有" : "个人私有"
+                }}</text
+              >
+              <text v-if="change.content" class="library-description"
+                >申请正文：{{ change.content }}</text
+              >
+              <text v-if="change.targetUserId" class="library-description"
+                >授权用户：{{
+                  change.targetUserName || change.targetUserId
+                }}</text
+              >
+              <text v-if="change.reviewNote" class="library-description"
+                >审批说明：{{ change.reviewNote }}</text
+              >
+              <wd-button
+                v-if="change.hasOriginal"
+                plain
+                size="small"
+                :disabled="!!reviewing"
+                @click="openChangeOriginal(change)"
+                >查看待审原件</wd-button
+              >
+              <wd-button
+                v-if="canReview && change.libraryId"
+                plain
+                size="small"
+                :disabled="!!reviewing"
+                @click="compareChange(change)"
+                >查看当前内容</wd-button
+              >
+              <template v-if="comparisons[change.id]">
+                <text class="library-description"
+                  >当前名称：{{
+                    comparisons[change.id].title || comparisons[change.id].name
+                  }}</text
+                >
+                <text
+                  v-if="comparisons[change.id].content !== undefined"
+                  class="library-description"
+                  >当前正文：{{ comparisons[change.id].content }}</text
+                >
+              </template>
+              <input
+                v-if="
+                  canReview &&
+                  ['pending', 'conflict', 'failed'].includes(change.status)
+                "
+                v-model="reviewNotes[change.id]"
+                :maxlength="1000"
+                class="title-input"
+                placeholder="审批说明（选填）"
+              />
+            </view>
+            <template
+              v-if="['pending', 'conflict', 'failed'].includes(change.status)"
+            >
+              <template v-if="canReview"
+                ><wd-button
+                  size="small"
+                  :disabled="!!reviewing"
+                  @click="reviewChange(change, 'approve')"
+                  >{{
+                    change.status === "conflict" ? "处理冲突并批准" : "批准"
+                  }}</wd-button
+                ><wd-button
+                  plain
+                  size="small"
+                  :disabled="!!reviewing"
+                  @click="reviewChange(change, 'reject')"
+                  >驳回</wd-button
+                ></template
+              >
+              <wd-button
+                v-else
+                plain
+                size="small"
+                :disabled="!!reviewing"
+                @click="cancelChange(change)"
+                >撤回</wd-button
+              >
+            </template>
+          </view>
+        </view>
         <view class="scope-tabs">
           <view
             v-for="scope in scopeOptions"
@@ -44,7 +161,7 @@
             <text class="section-label">知识分类</text>
             <view class="permission-hint"
               ><wd-icon name="secured" size="13px" /><text
-                >公有知识 + 我的私有知识</text
+                >全部获授权知识库</text
               ></view
             >
           </view>
@@ -94,6 +211,20 @@
                 }}</text></view
               >
               <text class="library-count">{{ libraryCount(library.id) }}</text>
+              <wd-button
+                v-if="library.canWrite"
+                size="small"
+                type="text"
+                @click.stop="renameLibrary(library)"
+                >更名</wd-button
+              >
+              <wd-button
+                v-if="library.canWrite"
+                size="small"
+                type="text"
+                @click.stop="removeLibrary(library)"
+                >删除</wd-button
+              >
             </view>
           </view>
         </view>
@@ -247,7 +378,7 @@
         </view>
         <view class="demo-notice"
           ><wd-icon name="info-circle" size="13px" /><text
-            >演示数据，本地模拟入库</text
+            >文件上传和文字录入遵守同一套知识库授权。</text
           ></view
         >
       </view>
@@ -269,7 +400,7 @@
           ><view
             v-if="!submitting"
             class="dialog-close"
-            @click="addVisible = false"
+            @click="!submitting && (addVisible = false)"
             ><wd-icon name="close" size="18px" color="#89968f" /></view
         ></view>
         <scroll-view scroll-y class="dialog-scroll" :show-scrollbar="false">
@@ -277,16 +408,22 @@
             <view class="success-symbol"
               ><wd-icon name="check" size="29px" color="#237b61" /></view
             ><text class="success-title">{{
-              entryMode === "file" ? "资料已收录" : "资料已可检索"
+              approvalPending
+                ? "已提交审批"
+                : entryMode === "file"
+                  ? "资料已收录"
+                  : "资料已提交"
             }}</text
             ><text class="success-description"
-              >{{ successCount }} 份资料已加入「{{
-                libraryName(targetLibrary)
-              }}」</text
+              >{{ successCount }} 份资料{{
+                approvalPending ? "已提交到" : "已加入"
+              }}「{{ libraryName(targetLibrary) }}」</text
             ><text class="success-notice">{{
-              entryMode === "file"
-                ? "本地演示仅记录名称和大小，暂未解析文件内容。"
-                : "本次为本地模拟入库，仅用于页面演示。"
+              approvalPending
+                ? "管理员批准前，资料不会进入知识检索。"
+                : entryMode === "file"
+                  ? "已完成解析和索引，可用于问答检索。"
+                  : "资料已提交，完成解析和索引后可用于问答。"
             }}</text>
           </view>
           <view v-else class="dialog-body">
@@ -313,7 +450,7 @@
                 ><wd-icon name="usergroup" size="18px" /><view
                   ><text class="target-scope-title">公有知识</text
                   ><text class="target-scope-description"
-                    >所有登录用户可读、上传、修改和删除</text
+                    >当前企业用户可读，新增、修改和删除需管理员审批</text
                   ></view
                 ><wd-icon
                   v-if="targetScope === 'public'"
@@ -355,38 +492,19 @@
                 ></view
               ></view
             >
-            <view v-if="entryMode === 'file'">
-              <view
-                class="file-dropzone"
-                :class="{ 'is-disabled': submitting || choosing }"
-                @click="chooseFiles"
-                ><view class="upload-symbol"
-                  ><wd-icon name="upload" size="25px" color="#237b61" /></view
-                ><text class="dropzone-title">{{
-                  choosing ? "正在选择文件…" : "点击选择本地文件"
-                }}</text
-                ><text class="dropzone-description"
-                  >支持 PDF、DOCX、XLSX、TXT，最多 5 份</text
-                ></view
-              >
-              <view
-                v-for="file in selectedFiles"
-                :key="file.id"
-                class="selected-file"
-                ><wd-icon name="file" size="18px" color="#637e70" /><text
-                  class="selected-file-name"
-                  >{{ file.name }}</text
-                ><text class="selected-file-size">{{ file.size }}</text
-                ><view
-                  v-if="!submitting"
-                  class="selected-file-remove"
-                  @click="
-                    selectedFiles = selectedFiles.filter(
-                      (item) => item.id !== file.id
-                    )
-                  "
-                  ><wd-icon name="close" size="13px" color="#8e9a92" /></view
-              ></view>
+            <view v-if="entryMode === 'file'" class="file-upload-region">
+              <ChatUpload
+                v-if="addVisible"
+                :file-types="fileTypes"
+                :library-id="targetLibrary"
+                :library-name="libraryName(targetLibrary)"
+                @busy-change="submitting = $event"
+                @uploaded="onUploaded"
+                @chat="
+                  addVisible = false;
+                  emit('chat');
+                "
+              />
             </view>
             <view v-else class="text-entry"
               ><text class="field-label">知识标题</text
@@ -394,7 +512,7 @@
                 v-model="textTitle"
                 :disabled="submitting"
                 class="title-input"
-                :maxlength="80"
+                :maxlength="200"
                 placeholder="例如：销售订单审核注意事项"
                 placeholder-style="color:#a0aaa4;font-size:13px"
               /><text class="field-label content-label">知识内容</text
@@ -402,22 +520,22 @@
                 v-model="textContent"
                 :disabled="submitting"
                 class="content-input"
-                :maxlength="6000"
+                :maxlength="100000"
                 placeholder="记录业务规则、工作经验或操作步骤…"
                 placeholder-style="color:#a0aaa4;font-size:13px"
               /><text class="character-count"
-                >{{ textContent.length }} / 6000</text
+                >{{ textContent.length }} / 100000</text
               ></view
             >
             <view v-if="submitting" class="processing-note"
               ><wd-loading size="16px" color="#237b61" /><text
-                >正在本地模拟入库…</text
+                >正在提交资料，请稍候…</text
               ></view
             >
             <text v-if="formError" class="form-error">{{ formError }}</text>
             <view class="form-notice"
               ><wd-icon name="info-circle" size="13px" /><text
-                >演示数据，本地模拟入库。文件仅选择名称和大小。</text
+                >文件上传与文字录入遵守相同权限，处理完成后可用于问答。</text
               ></view
             >
           </view>
@@ -429,9 +547,10 @@
             :round="false"
             :disabled="submitting"
             custom-style="height:40px;border-radius:9px;color:#66796d;border-color:#dfe7e1;background:#fff;"
-            @click="addVisible = false"
+            @click="!submitting && (addVisible = false)"
             >取消</wd-button
           ><wd-button
+            v-if="entryMode === 'text' || submitted"
             :round="false"
             :loading="submitting"
             custom-style="height:40px;border-radius:9px;background:#237b61;border-color:#237b61;"
@@ -481,7 +600,7 @@
                   :class="`scope-badge--${documentScope(detailDocument)}`"
                   >{{
                     documentScope(detailDocument) === "public"
-                      ? "公有 · 所有登录用户"
+                      ? "公有 · 变更需管理员审批"
                       : "私有 · 仅我自己"
                   }}</text
                 ></view
@@ -514,15 +633,21 @@
             }}</text
             ><text class="detail-content">{{
               detailDocument.content ||
-              "本地演示暂未解析文件内容。完成真实知识库接入后，可以在此查看资料原文与解析结果。"
+              detailDocument.error ||
+              (detailDocument.status === "processing"
+                ? "资料正在解析和索引，请稍候。"
+                : "暂无可显示的正文。")
             }}</text
             ><view class="form-notice"
               ><wd-icon name="info-circle" size="13px" /><text
-                >演示数据，本地模拟入库</text
+                >文件上传和文字录入使用相同的公私权限。</text
               ></view
             ></view
           ></scroll-view
         >
+        <view v-if="detailDocument.error" class="form-error">{{
+          detailDocument.error
+        }}</view>
         <view class="dialog-footer detail-footer"
           ><wd-button
             v-if="canOperate(detailDocument)"
@@ -530,6 +655,14 @@
             custom-style="color:#b56b63;font-size:13px;"
             @click="confirmDelete(detailDocument)"
             >删除资料</wd-button
+          ><wd-button
+            v-if="
+              detailDocument.status === 'failed' && canOperate(detailDocument)
+            "
+            type="text"
+            :loading="submitting"
+            @click="retryDocument"
+            >重试处理</wd-button
           ><view class="detail-footer-buttons"
             ><wd-button
               type="text"
@@ -550,6 +683,7 @@
 
     <wd-popup
       v-model="editVisible"
+      :close-on-click-modal="!submitting"
       position="center"
       custom-style="width:calc(100% - 32px);max-width:600px;border-radius:18px;overflow:hidden;"
     >
@@ -559,10 +693,12 @@
             ><text class="dialog-title">编辑资料</text
             ><text class="dialog-subtitle">{{
               documentScope(editingDocument) === "public"
-                ? "这份公有资料由所有登录用户共同维护。"
+                ? "公有资料的修改需管理员批准，批准前保留当前内容。"
                 : "这份私有资料仅你自己可读和维护。"
             }}</text></view
-          ><view class="dialog-close" @click="editVisible = false"
+          ><view
+            class="dialog-close"
+            @click="!submitting && (editVisible = false)"
             ><wd-icon name="close" size="18px" color="#89968f" /></view
         ></view>
         <scroll-view scroll-y class="dialog-scroll" :show-scrollbar="false"
@@ -590,7 +726,7 @@
             ><input
               v-model="editTitle"
               class="title-input"
-              :maxlength="160"
+              :maxlength="200"
               placeholder="请输入资料名称"
             />
             <template v-if="editingDocument.type === 'text'"
@@ -598,19 +734,21 @@
               ><textarea
                 v-model="editContent"
                 class="content-input"
-                :maxlength="6000"
+                :maxlength="100000"
                 placeholder="请输入知识内容"
               /><text class="character-count"
-                >{{ editContent.length }} / 6000</text
+                >{{ editContent.length }} / 100000</text
               ></template
             >
             <text v-if="editError" class="form-error">{{ editError }}</text
             ><view class="form-notice"
               ><wd-icon name="info-circle" size="13px" /><text
                 >编辑不会改变所属知识库或公私范围。{{
-                  editingDocument.type === "text"
-                    ? "保存后按新内容参与模拟检索。"
-                    : "文件内容暂未接入解析，本次仅修改名称。"
+                  documentScope(editingDocument) === "public"
+                    ? "本次变更将提交管理员审批。"
+                    : editingDocument.type === "text"
+                      ? "保存后将重新建立检索索引。"
+                      : "本次修改名称，保留已解析的文件正文。"
                 }}</text
               ></view
             >
@@ -620,13 +758,62 @@
           ><wd-button
             type="text"
             custom-style="color:#75887c;"
-            @click="editVisible = false"
+            @click="!submitting && (editVisible = false)"
             >取消</wd-button
           ><wd-button
             :round="false"
             custom-style="height:40px;border-radius:9px;background:#237b61;border-color:#237b61;"
+            :loading="submitting"
             @click="saveEdit"
             >保存修改</wd-button
+          ></view
+        >
+      </view>
+    </wd-popup>
+    <wd-popup
+      v-model="libraryVisible"
+      position="center"
+      :close-on-click-modal="!submitting"
+      custom-style="width:calc(100% - 32px);max-width:540px;border-radius:18px;overflow:hidden;"
+    >
+      <view class="knowledge-dialog">
+        <view class="dialog-heading"
+          ><text class="dialog-title">新建知识库</text></view
+        >
+        <view class="dialog-body">
+          <text class="field-label">知识库名称</text
+          ><input
+            v-model="libraryNameDraft"
+            class="title-input"
+            :maxlength="80"
+            :disabled="submitting"
+            placeholder="例如：产品资料、工作笔记"
+          />
+          <text class="field-label">可见与操作范围</text>
+          <view class="target-scope-options">
+            <view
+              class="target-scope-option"
+              :class="{ 'is-selected': libraryScope === 'private' }"
+              @click="!submitting && (libraryScope = 'private')"
+              ><text>我的私有 · 仅本人可读写</text></view
+            >
+            <view
+              class="target-scope-option"
+              :class="{ 'is-selected': libraryScope === 'public' }"
+              @click="!submitting && (libraryScope = 'public')"
+              ><text>租户公有 · 可读，变更需审批</text></view
+            >
+          </view>
+          <text v-if="formError" class="form-error">{{ formError }}</text>
+        </view>
+        <view class="dialog-footer"
+          ><wd-button
+            plain
+            :disabled="submitting"
+            @click="libraryVisible = false"
+            >取消</wd-button
+          ><wd-button :loading="submitting" @click="createLibrary"
+            >创建</wd-button
           ></view
         >
       </view>
@@ -635,22 +822,25 @@
 </template>
 
 <script setup>
-import { computed, onUnmounted, ref } from "vue";
+import { computed, inject, onMounted, onUnmounted, ref } from "vue";
+import ChatUpload from "./ChatUpload.vue";
 
 defineOptions({ options: { virtualHost: true, styleIsolation: "shared" } });
-const props = defineProps({
-  libraries: { type: Array, default: () => [] },
-  documents: { type: Array, default: () => [] },
-  currentUser: {
-    type: Object,
-    default: () => ({ id: "lin", name: "林晓", role: "user" }),
-  },
-});
-const emit = defineEmits([
-  "add-document",
-  "remove-document",
-  "update-document",
-]);
+const api = inject("enterprise-api");
+const emit = defineEmits(["count", "chat", "updated"]);
+const changes = ref([]),
+  canReview = ref(false);
+const comparisons = ref({}),
+  reviewNotes = ref({}),
+  reviewing = ref("");
+const libraries = ref([]),
+  documents = ref([]),
+  fileTypes = ref(null);
+const loading = ref(false),
+  error = ref("");
+const libraryVisible = ref(false),
+  libraryNameDraft = ref(""),
+  libraryScope = ref("private");
 const scopeOptions = [
   { id: "all", label: "全部" },
   { id: "public", label: "公有知识" },
@@ -663,13 +853,12 @@ const addVisible = ref(false);
 const entryMode = ref("file");
 const targetLibrary = ref("");
 const targetScope = ref("private");
-const selectedFiles = ref([]);
 const textTitle = ref("");
 const textContent = ref("");
 const formError = ref("");
 const submitting = ref(false);
-const choosing = ref(false);
 const submitted = ref(false);
+const approvalPending = ref(false);
 const successCount = ref(0);
 const detailVisible = ref(false);
 const detailDocument = ref(null);
@@ -678,26 +867,21 @@ const editingDocument = ref(null);
 const editTitle = ref("");
 const editContent = ref("");
 const editError = ref("");
-let submitTimer;
+let refreshTimer,
+  requestVersion = 0,
+  openingVersion = 0;
 let disposed = false;
-let selectionVersion = 0;
 
-const accessibleLibraries = computed(() =>
-  props.libraries.filter(
-    (library) =>
-      library.scope === "public" ||
-      (library.scope === "private" && library.ownerId === props.currentUser.id)
-  )
-);
+const accessibleLibraries = computed(() => libraries.value);
 const accessibleDocuments = computed(() =>
-  props.documents.filter((document) =>
+  documents.value.filter((document) =>
     accessibleLibraries.value.some(
       (library) => library.id === document.libraryId
     )
   )
 );
 const uploadLibraries = computed(() =>
-  accessibleLibraries.value.filter((library) => library.canUpload)
+  accessibleLibraries.value.filter((library) => library.canWrite === true)
 );
 const scopeLibraries = computed(() =>
   accessibleLibraries.value.filter(
@@ -711,9 +895,9 @@ const targetLibraries = computed(() =>
 const scopeExplanation = computed(
   () =>
     ({
-      all: "公有知识全员共享与维护；我的私有知识仅自己可读、可操作。",
-      public: "所有登录用户都可以查看、上传、修改和删除公有资料。",
-      private: "只有你自己可以查看、上传、修改和删除这些私有资料。",
+      all: "展示你获授权的全部知识库，操作权限由服务端授权决定。",
+      public: "已批准内容可直接读取；资料和整库变更需管理员审批。",
+      private: "授权用户可直接查看、上传、修改和删除；顶级管理员拥有全部权限。",
     })[selectedScope.value]
 );
 const activeLibraryName = computed(() =>
@@ -756,17 +940,11 @@ function selectScope(scope) {
   selectedLibrary.value = "all";
 }
 function documentScope(document) {
-  return props.libraries.find((library) => library.id === document.libraryId)
+  return libraries.value.find((library) => library.id === document.libraryId)
     ?.scope;
 }
 function canOperate(document) {
-  const library = accessibleLibraries.value.find(
-    (library) => library.id === document?.libraryId
-  );
-  return (
-    !!library &&
-    (library.scope === "public" || library.ownerId === props.currentUser.id)
-  );
+  return document?.canWrite === true;
 }
 function setTargetScope(scope) {
   if (submitting.value) return;
@@ -775,7 +953,7 @@ function setTargetScope(scope) {
     uploadLibraries.value.find((library) => library.scope === scope)?.id || "";
 }
 function libraryName(id) {
-  return props.libraries.find((library) => library.id === id)?.name || "知识库";
+  return libraries.value.find((library) => library.id === id)?.name || "知识库";
 }
 function typeLabel(type) {
   return (
@@ -795,14 +973,7 @@ function statusLabel(status) {
   );
 }
 function documentStatus(document) {
-  return document.status === "ready" &&
-    document.type !== "text" &&
-    !document.content
-    ? "已收录"
-    : statusLabel(document.status);
-}
-function uniqueId() {
-  return `knowledge-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+  return statusLabel(document.status);
 }
 function formatSize(bytes) {
   const size = Math.max(0, Number(bytes) || 0);
@@ -810,206 +981,434 @@ function formatSize(bytes) {
   if (size < 1024 * 1024) return `${(size / 1024).toFixed(1)} KB`;
   return `${(size / (1024 * 1024)).toFixed(1)} MB`;
 }
+function normalized(document) {
+  return {
+    ...document,
+    name: document.title,
+    type:
+      document.inputType === "text"
+        ? "text"
+        : document.title.match(/\.([a-z0-9]+)$/i)?.[1] || "file",
+    size:
+      document.inputType === "text"
+        ? "文字知识"
+        : document.inputType === "file"
+          ? "文件资料"
+          : "文字知识",
+    owner: document.ownerName || "",
+    updatedAt: formatTime(document.updatedAt),
+  };
+}
+function formatTime(value) {
+  if (!value) return "";
+  const date = new Date(value);
+  return Number.isNaN(date.getTime())
+    ? String(value)
+    : `${date.getMonth() + 1}/${date.getDate()} ${String(date.getHours()).padStart(2, "0")}:${String(date.getMinutes()).padStart(2, "0")}`;
+}
+async function refresh() {
+  const version = ++requestVersion;
+  clearTimeout(refreshTimer);
+  loading.value = true;
+  try {
+    const [libResult, docResult, types, approvals] = await Promise.all([
+      api.libraries(),
+      api.documents(),
+      api.fileTypes(),
+      api.knowledgeChanges(),
+    ]);
+    if (disposed || version !== requestVersion) return;
+    if (
+      !Array.isArray(types.extensions) ||
+      !types.extensions.length ||
+      !types.extensions.every(
+        (value) => typeof value === "string" && /^\.[a-z0-9]+$/.test(value)
+      ) ||
+      !Number.isFinite(types.maxFileSizeBytes) ||
+      types.maxFileSizeBytes <= 0
+    )
+      throw new Error("服务未返回有效的文件格式，请刷新后重试");
+    libraries.value = (libResult.libraries || []).map((library) => ({
+      ...library,
+      scope: library.visibility,
+      description: library.canWrite
+        ? "已获知识库读写授权"
+        : "已获知识库读取授权",
+    }));
+    documents.value = (docResult.documents || []).map(normalized);
+    fileTypes.value = types;
+    changes.value = approvals.changes || [];
+    canReview.value = approvals.canReview === true;
+    emit("count", documents.value.length);
+    emit("updated", { libraries: libraries.value, documents: documents.value });
+    error.value = "";
+    if (detailVisible.value && detailDocument.value) {
+      const updated = documents.value.find(
+        (document) => document.id === detailDocument.value.id
+      );
+      if (updated && updated.status !== detailDocument.value.status)
+        await openDetail(updated);
+    }
+    if (documents.value.some((document) => document.status === "processing"))
+      refreshTimer = setTimeout(refresh, 2500);
+  } catch (failure) {
+    if (!disposed && version === requestVersion) error.value = failure.message;
+  } finally {
+    if (!disposed && version === requestVersion) loading.value = false;
+  }
+}
+function openLibrary() {
+  if (submitting.value) return;
+  libraryNameDraft.value = "";
+  libraryScope.value = "private";
+  formError.value = "";
+  libraryVisible.value = true;
+}
+async function createLibrary() {
+  if (submitting.value) return;
+  if (!libraryNameDraft.value.trim())
+    return void (formError.value = "请填写知识库名称");
+  submitting.value = true;
+  formError.value = "";
+  try {
+    const result = await api.createLibrary({
+      name: libraryNameDraft.value.trim(),
+      visibility: libraryScope.value,
+    });
+    if (disposed) return;
+    libraryVisible.value = false;
+    mutationNotice(result);
+    await refresh();
+  } catch (failure) {
+    if (!disposed) formError.value = failure.message;
+  } finally {
+    if (!disposed) submitting.value = false;
+  }
+}
 function openAdd() {
   if (!uploadLibraries.value.length) return;
-  selectionVersion += 1;
-  choosing.value = false;
-  setTargetScope("private");
+  setTargetScope(
+    uploadLibraries.value.some((library) => library.scope === "private")
+      ? "private"
+      : "public"
+  );
   entryMode.value = "file";
-  selectedFiles.value = [];
   textTitle.value = "";
   textContent.value = "";
   formError.value = "";
   submitted.value = false;
+  approvalPending.value = false;
   successCount.value = 0;
   addVisible.value = true;
 }
-function chooseFiles() {
-  if (submitting.value || choosing.value) return;
-  const remaining = 5 - selectedFiles.value.length;
-  if (remaining <= 0) {
-    uni.showToast({ title: "每次最多选择 5 份资料", icon: "none" });
-    return;
+async function onUploaded(result) {
+  successCount.value += result.count;
+  if (result.files?.some((file) => file.result?.approvalRequired)) {
+    approvalPending.value = true;
+    uni.showToast({ title: "公有资料已提交审批", icon: "none" });
   }
-  const version = selectionVersion;
-  choosing.value = true;
-  const options = {
-    count: remaining,
-    success(result) {
-      if (disposed || version !== selectionVersion || !addVisible.value) return;
-      let unsupported = 0;
-      for (const file of (result.tempFiles || []).slice(0, remaining)) {
-        const name =
-          file.name || (file.path || "").split(/[\\/]/).pop() || "未命名资料";
-        const extension = name.split(".").pop().toLowerCase();
-        const type = { pdf: "pdf", docx: "docx", xlsx: "xlsx", txt: "txt" }[
-          extension
-        ];
-        if (!type) {
-          unsupported += 1;
-          continue;
-        }
-        selectedFiles.value.push({
-          id: uniqueId(),
-          name,
-          size: formatSize(file.size),
-          type,
-        });
-      }
-      formError.value = unsupported
-        ? "部分文件格式不支持，请选择 PDF、DOCX、XLSX 或 TXT。"
-        : "";
-    },
-    fail(error) {
-      if (!/cancel/i.test(String(error?.errMsg || "")))
-        uni.showToast({ title: "选择文件失败，请重试", icon: "none" });
-    },
-    complete() {
-      if (version === selectionVersion) choosing.value = false;
-    },
-  };
-  // #ifdef H5
-  uni.chooseFile({
-    ...options,
-    type: "all",
-    extension: [".pdf", ".docx", ".xlsx", ".txt"],
-  });
-  // #endif
-  // #ifdef MP-WEIXIN
-  uni.chooseMessageFile({
-    ...options,
-    type: "file",
-    extension: ["pdf", "docx", "xlsx", "txt"],
-  });
-  // #endif
-  // #ifndef H5 || MP-WEIXIN
-  choosing.value = false;
-  uni.showToast({ title: "请在浏览器或微信小程序中选择文件", icon: "none" });
-  // #endif
+  await refresh();
 }
-function submitDocument() {
-  if (submitting.value) return;
+async function submitDocument() {
+  if (submitting.value || entryMode.value !== "text") return;
   formError.value = "";
   if (
     !targetLibraries.value.some((library) => library.id === targetLibrary.value)
-  ) {
-    formError.value = "请选择当前可见范围内的知识分类。";
-    return;
-  }
-  if (entryMode.value === "file" && !selectedFiles.value.length) {
-    formError.value = "请先选择需要入库的资料。";
-    return;
-  }
-  if (
-    entryMode.value === "text" &&
-    (!textTitle.value.trim() || !textContent.value.trim())
-  ) {
-    formError.value = "请填写知识标题和内容。";
-    return;
-  }
-  const common = {
-    libraryId: targetLibrary.value,
-    updatedAt: "刚刚",
-    status: "ready",
-    owner: props.currentUser.name,
-    uploadedBy: props.currentUser.id,
-    updatedBy: props.currentUser.id,
-    updatedByName: props.currentUser.name,
-  };
-  const documents =
-    entryMode.value === "file"
-      ? selectedFiles.value.map((file) => ({ ...file, ...common, content: "" }))
-      : [
-          {
-            id: uniqueId(),
-            name: textTitle.value.trim(),
-            type: "text",
-            size: `${textContent.value.trim().length} 字`,
-            content: textContent.value.trim(),
-            ...common,
-          },
-        ];
+  )
+    return void (formError.value = "请选择知识分类");
+  if (!textTitle.value.trim() || !textContent.value.trim())
+    return void (formError.value = "请填写知识标题和内容");
   submitting.value = true;
-  submitTimer = setTimeout(() => {
+  try {
+    const result = await api.createDocument({
+      libraryId: targetLibrary.value,
+      title: textTitle.value.trim(),
+      content: textContent.value.trim(),
+    });
     if (disposed) return;
-    documents.forEach((document) => emit("add-document", document));
-    successCount.value = documents.length;
-    submitting.value = false;
+    mutationNotice(result);
     submitted.value = true;
+    approvalPending.value = result.approvalRequired === true;
+    successCount.value = 1;
     selectedScope.value = targetScope.value;
     selectedLibrary.value = targetLibrary.value;
     search.value = "";
-  }, 760);
+    await refresh();
+  } catch (failure) {
+    if (!disposed) formError.value = failure.message;
+  } finally {
+    if (!disposed) submitting.value = false;
+  }
 }
-function openDetail(document) {
-  if (!canOperate(document)) return;
-  detailDocument.value = document;
-  detailVisible.value = true;
+async function openDetail(document) {
+  if (!accessibleDocuments.value.some((item) => item.id === document?.id))
+    return;
+  const version = ++openingVersion;
+  try {
+    const result = await api.document(document.id);
+    if (disposed || version !== openingVersion) return;
+    detailDocument.value = normalized(result.document);
+    detailVisible.value = true;
+  } catch (failure) {
+    if (!disposed && version === openingVersion) error.value = failure.message;
+  }
 }
 function confirmDelete(document) {
-  if (!canOperate(document)) return;
-  const isPublic = documentScope(document) === "public";
+  if (!canOperate(document) || submitting.value) return;
   uni.showModal({
     title: "删除知识资料",
-    content: `确定删除「${document.name}」？${isPublic ? "这是公有资料，删除后所有用户将无法再检索此资料。" : "删除后将不再参与你的知识检索。"}`,
+    content:
+      documentScope(document) === "public"
+        ? `确定申请删除「${document.name}」？管理员批准前继续使用当前资料。`
+        : `确定删除「${document.name}」？资料将不再用于后续问答检索。`,
     confirmText: "删除",
     confirmColor: "#b56b63",
-    success(result) {
+    async success(result) {
       if (!result.confirm || disposed || !canOperate(document)) return;
-      emit("remove-document", document.id);
-      if (detailDocument.value?.id === document.id) detailVisible.value = false;
-      uni.showToast({ title: "资料已删除", icon: "none" });
+      submitting.value = true;
+      try {
+        const changed = await api.deleteDocument(document.id);
+        mutationNotice(changed);
+        if (disposed) return;
+        if (detailDocument.value?.id === document.id)
+          detailVisible.value = false;
+        await refresh();
+      } catch (failure) {
+        if (!disposed) error.value = failure.message;
+      } finally {
+        if (!disposed) submitting.value = false;
+      }
     },
   });
 }
-function openEdit(document) {
-  if (!canOperate(document)) return;
-  editingDocument.value = document;
-  editTitle.value = document.name || "";
-  editContent.value = document.content || "";
-  editError.value = "";
-  detailVisible.value = false;
-  editVisible.value = true;
+async function openEdit(document) {
+  if (!canOperate(document) || submitting.value) return;
+  const version = ++openingVersion;
+  try {
+    const result = await api.document(document.id);
+    if (disposed || version !== openingVersion) return;
+    editingDocument.value = normalized(result.document);
+    editTitle.value = result.document.title || "";
+    editContent.value = result.document.content || "";
+    editError.value = "";
+    detailVisible.value = false;
+    editVisible.value = true;
+  } catch (failure) {
+    if (!disposed && version === openingVersion) error.value = failure.message;
+  }
 }
-function saveEdit() {
-  const original = props.documents.find(
-    (document) => document.id === editingDocument.value?.id
+async function saveEdit() {
+  if (submitting.value || !canOperate(editingDocument.value)) return;
+  if (!editTitle.value.trim() || !editContent.value.trim())
+    return void (editError.value = "请填写资料名称和知识内容");
+  submitting.value = true;
+  try {
+    const result = await api.updateDocument(editingDocument.value.id, {
+      title: editTitle.value.trim(),
+      content: editContent.value.trim(),
+    });
+    if (disposed) return;
+    editVisible.value = false;
+    mutationNotice(result);
+    await refresh();
+  } catch (failure) {
+    if (!disposed) editError.value = failure.message;
+  } finally {
+    if (!disposed) submitting.value = false;
+  }
+}
+async function retryDocument() {
+  if (submitting.value || !canOperate(detailDocument.value)) return;
+  submitting.value = true;
+  try {
+    const result = await api.retryDocument(detailDocument.value.id);
+    if (disposed) return;
+    if (result.document) detailDocument.value = normalized(result.document);
+    mutationNotice(result);
+    await refresh();
+  } catch (failure) {
+    if (!disposed) error.value = failure.message;
+  } finally {
+    if (!disposed) submitting.value = false;
+  }
+}
+function mutationNotice(result) {
+  if (result?.approvalRequired)
+    uni.showToast({ title: "已提交管理员审批", icon: "none" });
+}
+async function renameLibrary(library) {
+  const result = await new Promise((resolve) =>
+    uni.showModal({
+      title: "知识库更名",
+      editable: true,
+      placeholderText: library.name,
+      success: resolve,
+    })
   );
-  if (!original || !canOperate(original)) {
-    editError.value = "资料已不存在或无法操作，请关闭后重试。";
-    return;
+  if (!result.confirm || !result.content?.trim()) return;
+  try {
+    mutationNotice(
+      await api.updateLibrary(library.id, { name: result.content.trim() })
+    );
+    await refresh();
+  } catch (failure) {
+    error.value = failure.message;
   }
-  if (!editTitle.value.trim()) {
-    editError.value = "请填写资料名称。";
-    return;
-  }
-  if (original.type === "text" && !editContent.value.trim()) {
-    editError.value = "请填写知识内容。";
-    return;
-  }
-  emit("update-document", {
-    ...original,
-    name: editTitle.value.trim(),
-    content:
-      original.type === "text" ? editContent.value.trim() : original.content,
-    size:
-      original.type === "text"
-        ? `${editContent.value.trim().length} 字`
-        : original.size,
-    updatedAt: "刚刚",
-    updatedBy: props.currentUser.id,
-    updatedByName: props.currentUser.name,
-  });
-  editVisible.value = false;
-  uni.showToast({ title: "资料已更新", icon: "none" });
 }
+async function removeLibrary(library) {
+  const result = await new Promise((resolve) =>
+    uni.showModal({
+      title: "删除知识库",
+      content: `删除“${library.name}”及其资料？公有库需管理员审批。`,
+      success: resolve,
+    })
+  );
+  if (!result.confirm) return;
+  try {
+    const changed = await api.deleteLibrary(library.id);
+    mutationNotice(changed);
+    if (!changed.approvalRequired) selectedLibrary.value = "all";
+    await refresh();
+  } catch (failure) {
+    error.value = failure.message;
+  }
+}
+async function reviewChange(change, decision) {
+  if (reviewing.value) return;
+  let resolveConflict = false;
+  if (change.status === "conflict" && decision === "approve") {
+    if (!comparisons.value[change.id]) return compareChange(change);
+    const result = await new Promise((resolve) =>
+      uni.showModal({
+        title: "处理冲突",
+        content: "申请基于旧版本，是否按当前版本明确批准覆盖？",
+        success: resolve,
+      })
+    );
+    if (!result.confirm) return;
+    resolveConflict = true;
+  }
+  reviewing.value = change.id;
+  error.value = "";
+  try {
+    await api.reviewKnowledge(change.id, {
+      decision,
+      resolveConflict,
+      note: reviewNotes.value[change.id] || "",
+    });
+    await refresh();
+  } catch (failure) {
+    await refresh();
+    error.value = failure.message;
+  } finally {
+    reviewing.value = "";
+  }
+}
+async function cancelChange(change) {
+  if (reviewing.value) return;
+  reviewing.value = change.id;
+  try {
+    await api.cancelKnowledge(change.id);
+    await refresh();
+  } catch (failure) {
+    error.value = failure.message;
+  } finally {
+    reviewing.value = "";
+  }
+}
+async function compareChange(change) {
+  if (reviewing.value) return;
+  reviewing.value = change.id;
+  try {
+    const current = change.documentId
+      ? (await api.document(change.documentId)).document
+      : libraries.value.find((library) => library.id === change.libraryId);
+    if (!current)
+      throw new Error("当前资源不存在，请驳回申请或刷新后重新审核。");
+    comparisons.value = { ...comparisons.value, [change.id]: current };
+  } catch (failure) {
+    error.value = failure.message;
+  } finally {
+    reviewing.value = "";
+  }
+}
+async function openChangeOriginal(change) {
+  if (reviewing.value) return;
+  reviewing.value = change.id;
+  try {
+    await api.openKnowledgeOriginal(change.id);
+  } catch (failure) {
+    error.value = failure.message;
+  } finally {
+    reviewing.value = "";
+  }
+}
+function changeTitle(change) {
+  return (
+    change.title ||
+    documents.value.find((document) => document.id === change.documentId)
+      ?.name ||
+    libraries.value.find((library) => library.id === change.libraryId)?.name ||
+    "知识变更"
+  );
+}
+function changeActionLabel(action) {
+  return (
+    {
+      "library.create": "新建知识库",
+      "library.update": "知识库更名",
+      "library.delete": "删除知识库",
+      "library.grants": "调整知识授权",
+      "document.create": "新增资料",
+      "document.update": "修改资料",
+      "document.replace": "替换文件",
+      "document.reindex": "重建索引",
+      "document.delete": "删除资料",
+    }[action] || "知识变更"
+  );
+}
+function changeStatusLabel(status) {
+  return (
+    {
+      pending: "待审批",
+      processing: "发布中",
+      approved: "已批准",
+      rejected: "已驳回",
+      conflict: "存在冲突",
+      failed: "发布失败",
+      cancelled: "已撤回",
+    }[status] || status
+  );
+}
+onMounted(refresh);
 onUnmounted(() => {
   disposed = true;
-  clearTimeout(submitTimer);
+  requestVersion += 1;
+  openingVersion += 1;
+  clearTimeout(refreshTimer);
 });
+defineExpose({ refresh });
 </script>
 
 <style scoped>
+.file-upload-region {
+  height: 460px;
+  display: flex;
+  min-height: 0;
+}
+.knowledge-approval {
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+.knowledge-approval .library-copy {
+  flex-basis: 100%;
+}
+.knowledge-approval .library-description {
+  white-space: pre-wrap;
+  overflow: visible;
+  overflow-wrap: anywhere;
+  font-size: 12px;
+}
 .knowledge-panel {
   display: flex;
   flex: 1;
@@ -1043,24 +1442,24 @@ onUnmounted(() => {
   flex-direction: column;
   min-width: 0;
 }
-.eyebrow {
-  font-size: 10px;
-  font-weight: 700;
-  letter-spacing: 1.8px;
-  color: #81968a;
-  margin-bottom: 8px;
+.page-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-shrink: 0;
+}
+.page-action {
+  min-width: 120px;
+}
+.page-error {
+  display: block;
+  margin: -12px 0 18px;
 }
 .page-title {
   font-size: 28px;
   font-weight: 650;
   line-height: 39px;
   letter-spacing: 0.3px;
-}
-.page-description {
-  font-size: 13px;
-  line-height: 22px;
-  color: #849188;
-  margin-top: 8px;
 }
 .section-heading {
   display: flex;
@@ -1926,32 +2325,21 @@ onUnmounted(() => {
 }
 @media (max-width: 767px) {
   .knowledge-content {
-    padding: 24px 17px;
+    padding: 16px;
   }
   .page-heading {
-    align-items: flex-start;
-    gap: 12px;
-    margin-bottom: 25px;
+    margin-bottom: 18px;
   }
-  .eyebrow {
-    font-size: 9px;
-    margin-bottom: 5px;
+  .page-heading__copy {
+    display: none;
   }
-  .page-title {
-    font-size: 24px;
-    line-height: 34px;
+  .page-actions {
+    width: 100%;
+    gap: 8px;
   }
-  .page-description {
-    max-width: 230px;
-    font-size: 11px;
-    line-height: 20px;
-    margin-top: 6px;
-  }
-  .page-heading :deep(.wd-button) {
-    height: 36px !important;
-    font-size: 12px !important;
-    padding: 0 12px !important;
-    margin-top: 20px;
+  .page-action {
+    flex: 1;
+    min-width: 0;
   }
   .section-label {
     font-size: 13px;
@@ -1998,10 +2386,11 @@ onUnmounted(() => {
     font-size: 9px;
   }
   .library-list {
+    grid-template-columns: minmax(0, 1fr);
     gap: 8px;
   }
   .library-item {
-    min-height: 77px;
+    min-height: 68px;
     gap: 8px;
     padding: 11px 10px;
     border-radius: 10px;

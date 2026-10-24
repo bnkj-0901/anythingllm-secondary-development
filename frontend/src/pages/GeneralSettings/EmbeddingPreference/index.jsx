@@ -215,7 +215,7 @@ export default function GeneralEmbeddingPreference() {
 
   useEffect(() => {
     async function fetchKeys() {
-      const _settings = await System.keys();
+      const _settings = await System.keys("embedding");
       setSettings(_settings);
       setSelectedEmbedder(_settings?.EmbeddingEngine || "native");
       setHasEmbeddings(_settings?.HasExistingEmbeddings || false);
@@ -312,7 +312,7 @@ export default function GeneralEmbeddingPreference() {
       )}
       <Modal isOpen={isOpen} onClose={closeModal} size="lg">
         <ChangeWarningModal
-          warningText="Switching the embedding model will reset all previously embedded documents in all workspaces.\n\nConfirming will clear all embeddings from your vector database and remove all documents from your workspaces. Your uploaded documents will not be deleted, they will be available for re-embedding."
+          warningText="Changing the embedding model preserves your knowledge documents and existing indexes.\n\nExisting documents must be re-indexed in Knowledge management before they can be retrieved with the new model."
           onClose={closeModal}
           onConfirm={handleSaveSettings}
         />

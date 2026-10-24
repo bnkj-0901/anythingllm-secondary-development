@@ -3,7 +3,7 @@ import System from "@/models/system";
 import showToast from "@/utils/toast";
 import { useTranslation } from "react-i18next";
 
-export default function YoutubeOptions() {
+export default function YoutubeOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
 
@@ -18,12 +18,20 @@ export default function YoutubeOptions() {
         autoClose: false,
       });
 
-      const { data, error } = await System.dataConnectors.youtube.transcribe({
+      const { data, error } = await (
+        onImport || System.dataConnectors.youtube.transcribe
+      )({
         url: form.get("url"),
       });
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

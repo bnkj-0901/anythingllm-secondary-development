@@ -86,7 +86,7 @@ const ModelRouterRule = {
           conditions: serializedConditions,
           route_provider: String(data.route_provider),
           route_model: String(data.route_model),
-          created_by: creatorId ? Number(creatorId) : null,
+          created_by: creatorId ? String(creatorId) : null,
         },
       });
       return { rule: this._hydrate(rule), error: null };

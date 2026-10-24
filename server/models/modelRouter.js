@@ -55,7 +55,7 @@ const ModelRouter = {
           fallback_provider,
           fallback_model,
           cooldown_seconds: cooldown_seconds ?? 30,
-          created_by: creatorId ? Number(creatorId) : null,
+          created_by: creatorId ? String(creatorId) : null,
         },
       });
       return { router, error: null };
@@ -245,10 +245,16 @@ const ModelRouter = {
 
   workspaceCount: async function (routerId) {
     try {
-      const count = await prisma.workspaces.count({
-        where: { router_id: Number(routerId) },
+      const configurations = await prisma.ep_rag_settings.findMany({
+        select: { settings: true },
       });
-      return count;
+      return configurations.filter(({ settings }) => {
+        try {
+          return Number(JSON.parse(settings).router_id) === Number(routerId);
+        } catch {
+          return false;
+        }
+      }).length;
     } catch (error) {
       console.error(error.message);
       return 0;

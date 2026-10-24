@@ -132,7 +132,7 @@ export const getConfigurableSkills = (
     skill: "create-scheduled-job",
     icon: CalendarCheck,
     image: ScheduledJobsImage,
-    mode: ["singleUserOnly"],
+    mode: [],
   },
 });
 

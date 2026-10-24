@@ -66,7 +66,7 @@ export default function EmbedConfigsView() {
           <thead className="text-theme-text-secondary text-xs leading-[18px] uppercase border-white/10 border-b">
             <tr>
               <th scope="col" className="px-6 py-3">
-                {t("embeddable.table.workspace")}
+                {"知识库"}
               </th>
               <th scope="col" className="px-6 py-3">
                 {t("embeddable.table.chats")}

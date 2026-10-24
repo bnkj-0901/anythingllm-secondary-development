@@ -44,3 +44,11 @@ test('retrieval sources tolerate absent fields and keep long excerpts bounded', 
   assert(sources[1].title.length > 0)
   assert.equal(sources[1].summary, '')
 })
+
+test("history sources preserve citation numbers after earlier documents are removed", () => {
+  const sources = normalizeSources([
+    { title: "剩余来源", text: "当前可读的原文", citationNumber: 2 },
+  ]);
+  assert.equal(sources[0].citationNumber, 2);
+  assert.equal(normalizeSources([{ title: "旧来源" }])[0].citationNumber, 1);
+});

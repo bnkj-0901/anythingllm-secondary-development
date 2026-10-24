@@ -1,8 +1,7 @@
 const { v4: uuidv4 } = require("uuid");
 const { Document } = require("../../../models/documents");
 const { Telemetry } = require("../../../models/telemetry");
-const { Workspace } = require("../../../models/workspace");
-const { getEmbeddingEngineSelection } = require("../../../utils/helpers");
+const prisma = require("../../../utils/prisma");
 const { reqBody } = require("../../../utils/http");
 const { validApiKey } = require("../../../utils/middleware/validApiKey");
 const { EventLogs } = require("../../../models/eventLogs");
@@ -16,10 +15,10 @@ const { handleImageGenUpload } = require("../../../utils/files/multer");
 function apiOpenAICompatibleEndpoints(app) {
   if (!app) return;
 
-  app.get("/v1/openai/models", [validApiKey], async (_, response) => {
+  app.get("/v1/openai/models", [validApiKey], async (request, response) => {
     /*
     #swagger.tags = ['OpenAI Compatible Endpoints']
-    #swagger.description = 'Get all available "models" which are workspaces you can use for chatting.'
+    #swagger.description = 'Get the default model resolved for the credential execution user.'
     #swagger.responses[200] = {
       content: {
         "application/json": {
@@ -53,16 +52,19 @@ function apiOpenAICompatibleEndpoints(app) {
     }
     */
     try {
-      const data = [];
-      const workspaces = await Workspace.where();
-      for (const workspace of workspaces) {
-        data.push({
-          id: workspace.slug,
+      const connection =
+        await require("../../../enterprise/providers").resolveConnection(
+          request.ep,
+          "chat"
+        );
+      const data = [
+        {
+          id: "default",
           object: "model",
-          created: Math.floor(Number(new Date(workspace.createdAt)) / 1000),
-          owned_by: workspace?.chatProvider || process.env.LLM_PROVIDER,
-        });
-      }
+          created: 0,
+          owned_by: connection.provider,
+        },
+      ];
       return response.status(200).json({
         object: "list",
         data,
@@ -79,9 +81,9 @@ function apiOpenAICompatibleEndpoints(app) {
     async (request, response) => {
       /*
       #swagger.tags = ['OpenAI Compatible Endpoints']
-      #swagger.description = 'Execute a chat with a workspace with OpenAI compatibility. Supports streaming as well. Model must be a workspace slug from /models.'
+      #swagger.description = 'Execute a chat using the fixed API execution user and their currently authorized knowledge. Supports streaming. Use model default from /models.'
       #swagger.requestBody = {
-          description: 'Send a prompt to the workspace with full use of documents as if sending a chat in AnythingLLM. Only supports some values of OpenAI API. See example below.',
+          description: 'Send a prompt using the execution user knowledge permissions. Supports the OpenAI message and streaming format shown below.',
           required: true,
           content: {
             "application/json": {
@@ -92,7 +94,7 @@ function apiOpenAICompatibleEndpoints(app) {
                 {"role":"assistant", content: "AnythingLLM is...."},
                 {"role":"user", content: "Follow up question..."}
                 ],
-                model: "sample-workspace",
+                model: "default",
                 stream: true,
                 temperature: 0.7
               }
@@ -112,8 +114,10 @@ function apiOpenAICompatibleEndpoints(app) {
           temperature,
           stream = false,
         } = reqBody(request);
-        const workspace = await Workspace.get({ slug: String(model) });
-        if (!workspace) return response.status(401).end();
+        if (model !== "default")
+          return response
+            .status(404)
+            .json({ error: "Unknown model; use default" });
 
         const userMessage = messages.pop();
         if (userMessage?.role !== "user") {
@@ -136,7 +140,7 @@ function apiOpenAICompatibleEndpoints(app) {
 
         if (!stream) {
           const chatResult = await OpenAICompatibleChat.chatSync({
-            workspace,
+            ctx: request.ep,
             systemPrompt,
             history,
             prompt: extractTextContent(userMessage.content),
@@ -145,15 +149,14 @@ function apiOpenAICompatibleEndpoints(app) {
           });
 
           await Telemetry.sendTelemetry("sent_chat", {
-            LLMSelection:
-              workspace.chatProvider ?? process.env.LLM_PROVIDER ?? "openai",
+            LLMSelection: process.env.LLM_PROVIDER ?? "openai",
             Embedder: process.env.EMBEDDING_ENGINE || "inherit",
             VectorDbSelection: process.env.VECTOR_DB || "lancedb",
             TTSSelection: process.env.TTS_PROVIDER || "native",
           });
           await EventLogs.logEvent("api_sent_chat", {
-            workspaceName: workspace?.name,
-            chatModel: workspace?.chatModel || "System Default",
+            tenantId: request.ep.tenantId,
+            chatModel: "System Default",
           });
           return response.status(200).json(chatResult);
         }
@@ -165,7 +168,7 @@ function apiOpenAICompatibleEndpoints(app) {
         response.flushHeaders();
 
         await OpenAICompatibleChat.streamChat({
-          workspace,
+          ctx: request.ep,
           systemPrompt,
           history,
           prompt: extractTextContent(userMessage.content),
@@ -181,8 +184,8 @@ function apiOpenAICompatibleEndpoints(app) {
           LLMModel: getModelTag(),
         });
         await EventLogs.logEvent("api_sent_chat", {
-          workspaceName: workspace?.name,
-          chatModel: workspace?.chatModel || "System Default",
+          tenantId: request.ep.tenantId,
+          chatModel: "System Default",
         });
         response.end();
       } catch (e) {
@@ -250,18 +253,22 @@ function apiOpenAICompatibleEndpoints(app) {
         } = require("../../../utils/ImageGenerators");
 
         const result =
-          imageBuffers.length > 0
-            ? await editImageForWorkspace({
-                prompt: String(prompt),
-                images: imageBuffers,
-                size: size ? String(size) : undefined,
-                signal,
-              })
-            : await generateImageForWorkspace({
-                prompt: String(prompt),
-                size: size ? String(size) : undefined,
-                signal,
-              });
+          await require("../../../enterprise/execution-context").runExecution(
+            request.ep,
+            async () =>
+              imageBuffers.length > 0
+                ? await editImageForWorkspace({
+                    prompt: String(prompt),
+                    images: imageBuffers,
+                    size: size ? String(size) : undefined,
+                    signal,
+                  })
+                : await generateImageForWorkspace({
+                    prompt: String(prompt),
+                    size: size ? String(size) : undefined,
+                    signal,
+                  })
+          );
 
         if (responseFormat === "blob") {
           if (result.notice)
@@ -331,8 +338,12 @@ function apiOpenAICompatibleEndpoints(app) {
             throw new Error("All inputs to be embedded must be strings.");
         }
 
-        const Embedder = getEmbeddingEngineSelection();
-        const embeddings = await Embedder.embedChunks(input);
+        const providers = require("../../../enterprise/providers");
+        const connection = await providers.resolveConnection(
+          request.ep,
+          "embedding"
+        );
+        const embeddings = await providers.embed(connection, input);
         const data = [];
         embeddings.forEach((embedding, index) => {
           data.push({
@@ -345,7 +356,7 @@ function apiOpenAICompatibleEndpoints(app) {
         return response.status(200).json({
           object: "list",
           data,
-          model: Embedder.model,
+          model: connection.config.model,
         });
       } catch (e) {
         console.error(e.message, e);
@@ -360,7 +371,7 @@ function apiOpenAICompatibleEndpoints(app) {
     async (request, response) => {
       /*
       #swagger.tags = ['OpenAI Compatible Endpoints']
-      #swagger.description = 'List all the vector database collections connected to AnythingLLM. These are essentially workspaces but return their unique vector db identifier - this is the same as the workspace slug.'
+      #swagger.description = 'List knowledge libraries currently authorized for the API execution user. IDs are library IDs; storage uses the configured original vector provider adapter.'
       #swagger.responses[200] = {
         content: {
           "application/json": {
@@ -369,9 +380,9 @@ function apiOpenAICompatibleEndpoints(app) {
               "example": {
                 "data": [
                   {
-                    "id": "slug-here",
+                    "id": "library-id-here",
                     "object": "vector_store",
-                    "name": "My workspace",
+                    "name": "My knowledge library",
                     "file_counts": {
                       "total": 3
                     },
@@ -401,17 +412,20 @@ function apiOpenAICompatibleEndpoints(app) {
         }
 
         const data = [];
-        const VectorDBProvider = process.env.VECTOR_DB || "lancedb";
-        const workspaces = await Workspace.where();
-
-        for (const workspace of workspaces) {
+        const VectorDBProvider = (
+          await require("../../../enterprise/vector-store").settings()
+        ).provider;
+        const libraries = await prisma.ep_libraries.findMany({
+          where: Document.libraryScope(request.ep),
+        });
+        for (const library of libraries) {
           data.push({
-            id: workspace.slug,
+            id: library.id,
             object: "vector_store",
-            name: workspace.name,
+            name: library.name,
             file_counts: {
-              total: await Document.count({
-                workspaceId: Number(workspace.id),
+              total: await Document.count(request.ep, {
+                libraryId: library.id,
               }),
             },
             provider: VectorDBProvider,

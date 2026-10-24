@@ -11,7 +11,7 @@ export default function MemoriesRow({ onClose }) {
   const { closeSidebar } = useSourcesSidebar();
   const [memoryEnabled, setMemoryEnabled] = useState(null);
 
-  const isAdmin = !user || user?.role === "admin";
+  const isAdmin = user?.identity === "platform";
 
   useEffect(() => {
     System.keys().then((settings) => {

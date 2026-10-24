@@ -1,14 +1,7 @@
-/* eslint-env jest, node */
-const {
-  grepCommand,
-  grepAllSlashCommands,
-  isReservedCommand,
-  chatPrompt,
-} = require("../../../utils/chats");
-const { SlashCommandPresets } = require("../../../models/slashCommandsPresets");
-const { promptWithMemories } = require("../../../utils/memories");
-
-jest.mock("../../../models/slashCommandsPresets");
+const ctx = { identity: "tenant", tenantId: "company-a", userId: "alice" };
+jest.mock("../../../models/slashCommandsPresets", () => ({
+  SlashCommandPresets: { getUserPresets: jest.fn(), where: jest.fn() },
+}));
 jest.mock("../../../utils/memories", () => ({
   promptWithMemories: jest.fn(async ({ systemPrompt }) => systemPrompt),
 }));
@@ -17,180 +10,104 @@ jest.mock("../../../models/systemPromptVariables", () => ({
     expandSystemPromptVariables: jest.fn(async (prompt) => prompt),
   },
 }));
-
-// Helper to shape preset rows the way the model returns them.
-const preset = (command, prompt) => ({ command, prompt });
-
-describe("grepCommand", () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it("returns the built-in command when the message starts with it", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([]);
-    expect(await grepCommand("/reset")).toBe("/reset");
-    expect(await grepCommand("/RESET now")).toBe("/reset"); // case-insensitive
-    expect(await grepCommand("/reset?")).toBe("/reset"); // punctuation still dispatches
-  });
-
-  it("returns the built-in command when followed by more text", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([]);
-    expect(await grepCommand("/img a cat")).toBe("/img");
-  });
-
-  it("returns the message unchanged when no command matches", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([]);
-    expect(await grepCommand("hello there")).toBe("hello there");
-  });
-
-  it("does not match a built-in command that is part of a longer command", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([]);
-    expect(await grepCommand("/resetall")).toBe("/resetall");
-    expect(await grepCommand("/reset-all")).toBe("/reset-all");
-    expect(await grepCommand("/resetting my password, how?")).toBe(
-      "/resetting my password, how?"
-    );
-    expect(await grepCommand("/imgs hello")).toBe("/imgs hello");
-  });
-
-  it("expands a preset whose command extends a built-in command name", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([
-      preset("/reset-all", "clear every workspace"),
-    ]);
-    expect(await grepCommand("/reset-all")).toBe("clear every workspace");
-  });
-
-  describe("preset expansion", () => {
-    beforeEach(() => {
-      SlashCommandPresets.getUserPresets.mockResolvedValue([
-        preset("/weather", "what is the weather?"),
-      ]);
-    });
-
-    it("expands a command at the start of the message", async () => {
-      expect(await grepCommand("/weather")).toBe("what is the weather?");
-    });
-
-    it("expands a command that follows other text and a space", async () => {
-      expect(await grepCommand("ok, /weather")).toBe(
-        "ok, what is the weather?"
-      );
-    });
-
-    it("expands a command with trailing punctuation", async () => {
-      expect(await grepCommand("/weather?")).toBe("what is the weather??");
-    });
-
-    it("does not expand a command that is part of a longer word", async () => {
-      expect(await grepCommand("/weatherman")).toBe("/weatherman");
-    });
-
-    it("does not expand a command glued to the end of a word", async () => {
-      expect(await grepCommand("foo/weather")).toBe("foo/weather");
-    });
-  });
-
-  it("expands multiple presets in a single message", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([
-      preset("/weather", "the weather"),
-      preset("/time", "the time"),
-    ]);
-    expect(await grepCommand("/weather and /time")).toBe(
-      "the weather and the time"
-    );
-  });
-
-  it("scopes preset lookup to the passed user", async () => {
-    SlashCommandPresets.getUserPresets.mockResolvedValue([]);
-    await grepCommand("hi", { id: 42 });
-    expect(SlashCommandPresets.getUserPresets).toHaveBeenCalledWith(42);
-  });
+const {
+  grepCommand,
+  grepAllSlashCommands,
+  isReservedCommand,
+  chatPrompt,
+} = require("../../../utils/chats");
+const { SlashCommandPresets } = require("../../../models/slashCommandsPresets");
+const { promptWithMemories } = require("../../../utils/memories");
+const {
+  SystemPromptVariables,
+} = require("../../../models/systemPromptVariables");
+beforeEach(() => {
+  jest.clearAllMocks();
+  SlashCommandPresets.getUserPresets.mockResolvedValue([
+    { command: "/weather", prompt: "the weather" },
+    { command: "/time", prompt: "the time" },
+    { command: "/reset-all", prompt: "reset all" },
+  ]);
+  SlashCommandPresets.where.mockResolvedValue([
+    { command: "/weather", prompt: "the weather" },
+  ]);
 });
-
-describe("isReservedCommand", () => {
-  it("reserves exact matches of the built-in commands", () => {
-    expect(isReservedCommand("/reset")).toBe(true);
-    expect(isReservedCommand("/img")).toBe(true);
-  });
-
-  it("is case-insensitive", () => {
-    expect(isReservedCommand("/RESET")).toBe(true);
-    expect(isReservedCommand("/Img")).toBe(true);
-  });
-
-  it("allows commands that extend a built-in command name", () => {
-    expect(isReservedCommand("/reset-all")).toBe(false);
-    expect(isReservedCommand("/resetall")).toBe(false);
-    expect(isReservedCommand("/img-gen")).toBe(false);
-    expect(isReservedCommand("/imgs")).toBe(false);
-  });
-
-  it("allows unrelated commands", () => {
-    expect(isReservedCommand("/weather")).toBe(false);
-    expect(isReservedCommand("")).toBe(false);
-  });
+test.each([
+  ["/reset", "/reset"],
+  ["/RESET now", "/reset"],
+  ["/reset?", "/reset"],
+  ["/img a cat", "/img"],
+  ["/resetall", "/resetall"],
+  ["/imgs hello", "/imgs hello"],
+  ["hello there", "hello there"],
+  ["/reset-all", "reset all"],
+  ["/weather", "the weather"],
+  ["ok, /weather", "ok, the weather"],
+  ["/weather?", "the weather?"],
+  ["/weatherman", "/weatherman"],
+  ["foo/weather", "foo/weather"],
+  ["/weather and /time", "the weather and the time"],
+])("command %s preserves original matching", async (input, expected) =>
+  expect(await grepCommand(input, ctx)).toBe(expected)
+);
+test("presets always use the actual execution identity", async () => {
+  await grepCommand("hello", ctx);
+  expect(SlashCommandPresets.getUserPresets).toHaveBeenCalledWith(
+    ctx,
+    undefined
+  );
+  expect(await grepCommand("/weather")).toBe("/weather");
 });
-
-describe("grepAllSlashCommands", () => {
-  beforeEach(() => jest.clearAllMocks());
-
-  it("expands presets regardless of user (not scoped)", async () => {
-    SlashCommandPresets.where.mockResolvedValue([
-      preset("/weather", "what is the weather?"),
-    ]);
-    expect(await grepAllSlashCommands("ok, /weather?")).toBe(
-      "ok, what is the weather??"
-    );
-    expect(SlashCommandPresets.where).toHaveBeenCalledWith({});
-  });
-
-  it("does not expand a command that is part of a longer word", async () => {
-    SlashCommandPresets.where.mockResolvedValue([
-      preset("/weather", "what is the weather?"),
-    ]);
-    expect(await grepAllSlashCommands("/weatherman")).toBe("/weatherman");
-  });
-
-  it("expands multiple presets in a single message", async () => {
-    SlashCommandPresets.where.mockResolvedValue([
-      preset("/weather", "the weather"),
-      preset("/time", "the time"),
-    ]);
-    expect(await grepAllSlashCommands("/weather and /time")).toBe(
-      "the weather and the time"
-    );
-  });
+test.each([
+  ["/reset", true],
+  ["/RESET", true],
+  ["/img", true],
+  ["/Img", true],
+  ["/reset-all", false],
+  ["/resetall", false],
+  ["/img-gen", false],
+  ["/imgs", false],
+  ["/weather", false],
+  ["", false],
+])("reserved command %s", (command, result) =>
+  expect(isReservedCommand(command)).toBe(result)
+);
+test("API preset expansion has the same personal scope", async () => {
+  expect(await grepAllSlashCommands("ok, /weather?", ctx)).toBe(
+    "ok, the weather?"
+  );
+  expect(SlashCommandPresets.where).toHaveBeenCalledWith(ctx, {});
 });
-
-describe("chatPrompt", () => {
-  const workspace = { id: 7, openAiPrompt: "Workspace prompt." };
-
-  beforeEach(() => promptWithMemories.mockClear());
-
-  it("injects memories scoped to the provided user", async () => {
-    await chatPrompt(workspace, { id: 3 });
-
-    expect(promptWithMemories).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: 3, workspaceId: 7 })
-    );
+test("API expansion keeps command boundaries", async () =>
+  expect(await grepAllSlashCommands("/weatherman", ctx)).toBe("/weatherman"));
+test("prompt variables and memories resolve the tenant user without Workspace ownership", async () => {
+  await chatPrompt({ openAiPrompt: "Company prompt" }, ctx, {
+    prompt: "Question",
   });
-
-  it("falls back to the null memory scope when no user is given", async () => {
-    await chatPrompt(workspace);
-
-    expect(promptWithMemories).toHaveBeenCalledWith(
-      expect.objectContaining({ userId: null, workspaceId: 7 })
-    );
+  expect(
+    SystemPromptVariables.expandSystemPromptVariables
+  ).toHaveBeenCalledWith("Company prompt", ctx.userId, {
+    tenantId: ctx.tenantId,
   });
-
-  it("never looks up memories when skipMemories is set", async () => {
-    const result = await chatPrompt(workspace, null, { skipMemories: true });
-
-    expect(result).toBe("Workspace prompt.");
-    expect(promptWithMemories).not.toHaveBeenCalled();
+  expect(promptWithMemories).toHaveBeenCalledWith(
+    expect.objectContaining({ ctx, prompt: "Question" })
+  );
+});
+test.each([
+  null,
+  { identity: "embed", tenantId: "company-a", userId: "anonymous" },
+  "visitor",
+])("anonymous context never loads personal memories", async (identity) => {
+  expect(await chatPrompt({ openAiPrompt: "Prompt" }, identity)).toBe("Prompt");
+  expect(promptWithMemories).not.toHaveBeenCalled();
+});
+test("stateless API can skip memories and a preexpanded prompt is not expanded twice", async () => {
+  await chatPrompt({ openAiPrompt: "Already expanded {literal}" }, ctx, {
+    skipMemories: true,
+    variablesExpanded: true,
   });
-
-  it("does not treat a non-object user (eg: a username string) as an identity", async () => {
-    await chatPrompt(workspace, "visitor-name", { skipMemories: true });
-
-    expect(promptWithMemories).not.toHaveBeenCalled();
-  });
+  expect(promptWithMemories).not.toHaveBeenCalled();
+  expect(
+    SystemPromptVariables.expandSystemPromptVariables
+  ).not.toHaveBeenCalled();
 });

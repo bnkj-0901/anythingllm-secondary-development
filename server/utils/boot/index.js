@@ -18,7 +18,7 @@ const { TelegramBotService } = require("../telegramBot");
 // Update .env keys with the correct values and boot. These are temporary and not real SSL certs - only use for local.
 // Test with https://localhost:3001/api/ping
 // build and copy frontend to server/public with correct API_BASE and start server in prod model and all should be ok
-function bootSSL(app, port = 3001) {
+function bootSSL(app, port = 3001, onStart = null) {
   try {
     console.log(
       `\x1b[33m[SSL BOOT ENABLED]\x1b[0m Loading the certificate and key for HTTPS mode...`
@@ -32,6 +32,11 @@ function bootSSL(app, port = 3001) {
 
     server
       .listen(port, async () => {
+        if (onStart) {
+          await onStart();
+          console.log(`Server listening on port ${port}`);
+          return;
+        }
         await migrateWebBrowsingToDefault(); // must run before markOnboarded() so a fresh instance is not mistaken for an existing one.
         await markOnboarded();
         await setupTelemetry();
@@ -57,15 +62,20 @@ function bootSSL(app, port = 3001) {
         stacktrace: e.stack,
       }
     );
-    return bootHTTP(app, port);
+    return bootHTTP(app, port, onStart);
   }
 }
 
-function bootHTTP(app, port = 3001) {
+function bootHTTP(app, port = 3001, onStart = null) {
   if (!app) throw new Error('No "app" defined - crashing!');
 
   app
     .listen(port, async () => {
+      if (onStart) {
+        await onStart();
+        console.log(`Server listening on port ${port}`);
+        return;
+      }
       await migrateWebBrowsingToDefault(); // must run before markOnboarded() so a fresh instance is not mistaken for an existing one.
       await markOnboarded();
       await setupTelemetry();

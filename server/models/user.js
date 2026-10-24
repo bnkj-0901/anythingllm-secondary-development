@@ -1,381 +1,195 @@
-const { Prisma } = require("@prisma/client");
-const prisma = require("../utils/prisma");
-const { EventLogs } = require("./eventLogs");
-
-/**
- * @typedef {Object} User
- * @property {number} id
- * @property {string} username
- * @property {string} password
- * @property {string} pfpFilename
- * @property {string} role
- * @property {boolean} suspended
- * @property {number|null} dailyMessageLimit
- */
-
+// A user belongs to exactly one tenant. Platform operators have a separate
+// identity and are never members of an enterprise's knowledge or conversations.
 const User = {
-  usernameRegex: new RegExp(/^[a-z][a-z0-9._@-]*$/),
-  writable: [
-    // Used for generic updates so we can validate keys in request body
-    "username",
-    "password",
-    "pfpFilename",
-    "role",
-    "suspended",
-    "dailyMessageLimit",
-    "bio",
-  ],
+  usernameRegex: /^[a-z][a-z0-9._@-]*$/,
   validations: {
-    /**
-     * Unix-style username regex:
-     * - Must start with a lowercase letter
-     * - Can contain lowercase letters, digits, underscores, hyphens, @ signs, and periods
-     * - 2-64 characters long
-     */
-    username: (newValue = "") => {
-      try {
-        const username = String(newValue);
-        if (username.length > 64)
-          throw new Error("Username cannot be longer than 64 characters");
-        if (username.length < 2)
-          throw new Error("Username must be at least 2 characters");
-        if (!User.usernameRegex.test(username))
-          throw new Error(
-            "Username must start with a lowercase letter and only contain lowercase letters, numbers, underscores, hyphens, and periods"
-          );
-        return username;
-      } catch (e) {
-        throw new Error(e.message);
-      }
+    name(value) {
+      if (
+        typeof value !== "string" ||
+        !value.trim() ||
+        value.trim().length > 80
+      )
+        throw Object.assign(new Error("姓名不能为空，最长 80 个字符"), {
+          status: 400,
+        });
+      return value.trim();
     },
-    role: (role = "default") => {
-      const VALID_ROLES = ["default", "admin", "manager"];
-      if (!VALID_ROLES.includes(role)) {
+    username(value = "") {
+      if (typeof value !== "string")
+        throw new Error("Username must be a string");
+      if (value.length > 64)
+        throw new Error("Username cannot be longer than 64 characters");
+      if (value.length < 2)
+        throw new Error("Username must be at least 2 characters");
+      if (!User.usernameRegex.test(value))
         throw new Error(
-          `Invalid role. Allowed roles are: ${VALID_ROLES.join(", ")}`
+          "Username must start with a lowercase letter and only contain lowercase letters, numbers, underscores, hyphens, and periods"
         );
-      }
-      return String(role);
+      return value;
     },
-    dailyMessageLimit: (dailyMessageLimit = null) => {
-      if (dailyMessageLimit === null) return null;
-      const limit = Number(dailyMessageLimit);
-      if (isNaN(limit) || limit < 1) {
+    bio(value = "") {
+      if (!value || typeof value !== "string") return "";
+      if (value.length > 1000)
+        throw new Error("Bio cannot be longer than 1,000 characters");
+      return value;
+    },
+    dailyMessageLimit(value = null) {
+      if (value === null) return null;
+      const limit = Number(value);
+      if (!Number.isInteger(limit) || limit < 1)
         throw new Error(
           "Daily message limit must be null or a number greater than or equal to 1"
         );
-      }
       return limit;
     },
-    bio: (bio = "") => {
-      if (!bio || typeof bio !== "string") return "";
-      if (bio.length > 1000)
-        throw new Error("Bio cannot be longer than 1,000 characters");
-      return String(bio);
-    },
   },
-  // validations for the above writable fields.
-  castColumnValue: function (key, value) {
-    switch (key) {
-      case "suspended":
-        return Number(Boolean(value));
-      case "dailyMessageLimit":
-        return value === null ? null : Number(value);
-      default:
-        return String(value);
-    }
-  },
-
-  filterFields: function (user = {}) {
+  filterFields(user = {}) {
     const {
       password: _password,
-      web_push_subscription_config: _web_push_subscription_config,
+      passwordHash: _passwordHash,
+      web_push_subscription_config: _push,
+      wechatIdentity: _wechatIdentity,
       ...rest
     } = user;
-    return { ...rest };
+    return rest;
   },
-  _identifyErrorAndFormatMessage: function (error) {
-    if (error instanceof Prisma.PrismaClientKnownRequestError) {
-      // P2002 is the unique constraint violation error code
-      if (error.code === "P2002") {
-        const target = error.meta?.target;
-        return `A user with that ${target?.join(", ")} already exists`;
-      }
-    }
-    return error.message;
-  },
-
-  create: async function ({
-    username,
-    password,
-    role = "default",
-    dailyMessageLimit = null,
-    bio = "",
-  }) {
-    const passwordCheck = this.checkPasswordComplexity(password);
-    if (!passwordCheck.checkedOK) {
-      return { user: null, error: passwordCheck.error };
-    }
-
-    try {
-      // Validate username format (validation function handles all checks)
-      const validatedUsername = this.validations.username(username);
-
-      const bcrypt = require("bcryptjs");
-      const hashedPassword = bcrypt.hashSync(password, 10);
-      const user = await prisma.users.create({
-        data: {
-          username: validatedUsername,
-          password: hashedPassword,
-          role: this.validations.role(role),
-          bio: this.validations.bio(bio),
-          dailyMessageLimit:
-            this.validations.dailyMessageLimit(dailyMessageLimit),
-        },
-      });
-      return { user: this.filterFields(user), error: null };
-    } catch (error) {
-      console.error("FAILED TO CREATE USER.", error.message);
-      return { user: null, error: this._identifyErrorAndFormatMessage(error) };
-    }
-  },
-  // Log the changes to a user object, but omit sensitive fields
-  // that are not meant to be logged.
-  loggedChanges: function (updates, prev = {}) {
-    const changes = {};
-    const sensitiveFields = ["password"];
-
-    Object.keys(updates).forEach((key) => {
-      if (!sensitiveFields.includes(key) && updates[key] !== prev[key]) {
-        changes[key] = `${prev[key]} => ${updates[key]}`;
-      }
-    });
-
-    return changes;
-  },
-
-  update: async function (userId, updates = {}) {
-    try {
-      if (!userId) throw new Error("No user id provided for update");
-      const currentUser = await prisma.users.findUnique({
-        where: { id: parseInt(userId) },
-      });
-      if (!currentUser) return { success: false, error: "User not found" };
-
-      // We previously had more lenient username validation, but now with more strict validation
-      // we dont want to break existing users by changing non-username fields.
-      // If they are not explictly changing the username, do not attempt to validate it.
-      if (updates.hasOwnProperty("username")) {
-        if (updates.username === currentUser.username) delete updates.username;
-      }
-
-      // Removes non-writable fields for generic updates
-      // and force-casts to the proper type;
-      Object.entries(updates).forEach(([key, value]) => {
-        if (this.writable.includes(key)) {
-          if (this.validations.hasOwnProperty(key)) {
-            updates[key] = this.validations[key](
-              this.castColumnValue(key, value)
-            );
-          } else {
-            updates[key] = this.castColumnValue(key, value);
-          }
-          return;
-        }
-        delete updates[key];
-      });
-
-      if (Object.keys(updates).length === 0)
-        return { success: false, error: "No valid updates applied." };
-
-      // Handle password specific updates
-      if (updates.hasOwnProperty("password")) {
-        const passwordCheck = this.checkPasswordComplexity(updates.password);
-        if (!passwordCheck.checkedOK) {
-          return { success: false, error: passwordCheck.error };
-        }
-        const bcrypt = require("bcryptjs");
-        updates.password = bcrypt.hashSync(updates.password, 10);
-      }
-
-      const user = await prisma.users.update({
-        where: { id: parseInt(userId) },
-        data: updates,
-      });
-
-      await EventLogs.logEvent(
-        "user_updated",
-        {
-          username: user.username,
-          changes: this.loggedChanges(updates, currentUser),
-        },
-        userId
-      );
-      return { success: true, error: null };
-    } catch (error) {
-      console.error("FAILED TO UPDATE USER.", error.message);
-      return {
-        success: false,
-        error: this._identifyErrorAndFormatMessage(error),
-      };
-    }
-  },
-
-  /**
-   * Explicit direct update of user object.
-   * Only use this method when directly setting a key value
-   * that takes no user input for the keys being modified.
-   * @param {number} id - The id of the user to update.
-   * @param {Object} data - The data to update the user with.
-   * @returns {Promise<Object>} The updated user object.
-   */
-  _update: async function (id = null, data = {}) {
-    if (!id) throw new Error("No user id provided for update");
-
-    try {
-      const user = await prisma.users.update({
-        where: { id },
-        data,
-      });
-      return { user, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { user: null, message: error.message };
-    }
-  },
-
-  /**
-   * Get all users that match the given clause without filtering the fields.
-   * Internal use only - do not use this method for user-input flows
-   * @param {Object} clause - The clause to filter the users by.
-   * @param {number|null} limit - The maximum number of users to return.
-   * @returns {Promise<Array<User>>} The users that match the given clause.
-   */
-  _where: async function (clause = {}, limit = null) {
-    try {
-      const users = await prisma.users.findMany({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-      });
-      return users;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
-  },
-
-  /**
-   * Returns a user object based on the clause provided.
-   * @param {Object} clause - The clause to use to find the user.
-   * @returns {Promise<import("@prisma/client").users|null>} The user object or null if not found.
-   */
-  get: async function (clause = {}) {
-    try {
-      const user = await prisma.users.findFirst({ where: clause });
-      return user ? this.filterFields({ ...user }) : null;
-    } catch (error) {
-      console.error(error.message);
-      return null;
-    }
-  },
-  // Returns user object with all fields
-  _get: async function (clause = {}) {
-    try {
-      const user = await prisma.users.findFirst({ where: clause });
-      return user ? { ...user } : null;
-    } catch (error) {
-      console.error(error.message);
-      return null;
-    }
-  },
-
-  count: async function (clause = {}) {
-    try {
-      const count = await prisma.users.count({ where: clause });
-      return count;
-    } catch (error) {
-      console.error(error.message);
-      return 0;
-    }
-  },
-
-  delete: async function (clause = {}) {
-    try {
-      await prisma.users.deleteMany({ where: clause });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-
-  where: async function (clause = {}, limit = null) {
-    try {
-      const users = await prisma.users.findMany({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-      });
-      return users.map((usr) => this.filterFields(usr));
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
-  },
-
-  checkPasswordComplexity: function (passwordInput = "") {
+  checkPasswordComplexity(passwordInput = "", environment = process.env) {
     const passwordComplexity = require("joi-password-complexity");
-    // Can be set via ENV variable on boot. No frontend config at this time.
-    // Docs: https://www.npmjs.com/package/joi-password-complexity
-    const complexityOptions = {
-      min: process.env.PASSWORDMINCHAR || 8,
-      max: process.env.PASSWORDMAXCHAR || 250,
-      lowerCase: process.env.PASSWORDLOWERCASE || 0,
-      upperCase: process.env.PASSWORDUPPERCASE || 0,
-      numeric: process.env.PASSWORDNUMERIC || 0,
-      symbol: process.env.PASSWORDSYMBOL || 0,
-      // reqCount should be equal to how many conditions you are testing for (1-4)
-      requirementCount: process.env.PASSWORDREQUIREMENTS || 0,
-    };
-
-    const complexityCheck = passwordComplexity(
-      complexityOptions,
+    const result = passwordComplexity(
+      {
+        min: environment.PASSWORDMINCHAR || 8,
+        max: environment.PASSWORDMAXCHAR || 250,
+        lowerCase: environment.PASSWORDLOWERCASE || 0,
+        upperCase: environment.PASSWORDUPPERCASE || 0,
+        numeric: environment.PASSWORDNUMERIC || 0,
+        symbol: environment.PASSWORDSYMBOL || 0,
+        requirementCount: environment.PASSWORDREQUIREMENTS || 0,
+      },
       "password"
     ).validate(passwordInput);
-    if (complexityCheck.hasOwnProperty("error")) {
-      let myError = "";
-      let prepend = "";
-      for (let i = 0; i < complexityCheck.error.details.length; i++) {
-        myError += prepend + complexityCheck.error.details[i].message;
-        prepend = ", ";
-      }
-      return { checkedOK: false, error: myError };
-    }
-
-    return { checkedOK: true, error: "No error." };
+    return result.error
+      ? {
+          checkedOK: false,
+          error: result.error.details.map(({ message }) => message).join(", "),
+        }
+      : { checkedOK: true, error: "No error." };
   },
-
-  /**
-   * Check if a user can send a chat based on their daily message limit.
-   * This limit is system wide and not per workspace and only applies to
-   * multi-user mode AND non-admin users.
-   * @param {User} user The user object record.
-   * @returns {Promise<boolean>} True if the user can send a chat, false otherwise.
-   */
-  canSendChat: async function (user) {
-    const { ROLES } = require("../utils/middleware/multiUserProtected");
-    if (!user || user.dailyMessageLimit === null || user.role === ROLES.admin)
+  authenticationContext(id, db) {
+    return db.one(
+      'SELECT u.id,u."tenantId",u.username,u.name,u.bio,u."pfpFilename",(u."wechatIdentity" IS NOT NULL) AS "wechatBound",(u."wechatIdentity" IS NOT NULL AND NOT u."wechatRegistrationComplete") AS "wechatRegistrationRequired",u.seen_recovery_codes,u.role,u.status,u."dailyMessageLimit",u."authVersion",t.code AS "tenantCode",t.name AS "tenantName",t.status AS "tenantStatus" FROM users u JOIN ep_tenants t ON t.id=u."tenantId" WHERE u.id=$1',
+      id
+    );
+  },
+  forLogin(tenantId, username, db) {
+    return db.one(
+      'SELECT id,"passwordHash" FROM users WHERE "tenantId"=$1 AND username=$2',
+      tenantId,
+      username
+    );
+  },
+  get(tenantId, id, db) {
+    return db.one(
+      'SELECT * FROM users WHERE "tenantId"=$1 AND id=$2',
+      tenantId,
+      id
+    );
+  },
+  list(tenantId, db) {
+    return db.all(
+      'SELECT id,username,name,status,role,"dailyMessageLimit","pfpFilename",("wechatIdentity" IS NOT NULL) AS "wechatBound","createdAt" FROM users WHERE "tenantId"=$1 ORDER BY "createdAt"',
+      tenantId
+    );
+  },
+  create(user, db) {
+    return db.one(
+      'INSERT INTO users("tenantId",username,name,"passwordHash",role,"createdAt","lastUpdatedAt","dailyMessageLimit") VALUES($1,$2,$3,$4,$5,$6,$6,$7) RETURNING id',
+      user.tenantId,
+      user.username,
+      user.name,
+      user.passwordHash,
+      user.role,
+      user.createdAt,
+      this.validations.dailyMessageLimit(user.dailyMessageLimit ?? null)
+    );
+  },
+  update(tenantId, id, updates, db) {
+    return db.run(
+      'UPDATE users SET name=$1,role=$2,status=$3,"passwordHash"=$4,"authVersion"=$5,"lastUpdatedAt"=$6,"dailyMessageLimit"=CASE WHEN $9 THEN $10 ELSE "dailyMessageLimit" END WHERE id=$7 AND "tenantId"=$8',
+      updates.name,
+      updates.role,
+      updates.status,
+      updates.passwordHash,
+      updates.authVersion,
+      updates.updatedAt,
+      id,
+      tenantId,
+      Object.hasOwn(updates, "dailyMessageLimit"),
+      this.validations.dailyMessageLimit(updates.dailyMessageLimit ?? null)
+    );
+  },
+  async canSendChat(user, db = require("../utils/prisma")) {
+    if (!user || user.dailyMessageLimit == null || user.role === "admin" || user.identity === "platform")
       return true;
-
-    const { WorkspaceChats } = require("./workspaceChats");
-    const currentChatCount = await WorkspaceChats.count({
-      user_id: user.id,
-      createdAt: {
-        gte: new Date(new Date() - 24 * 60 * 60 * 1000), // 24 hours
+    const count = await db.chats.count({
+      where: {
+        tenantId: user.tenantId,
+        userId: user.id,
+        createdAt: { gte: new Date(Date.now() - 24 * 60 * 60 * 1000) },
       },
     });
-
-    return currentChatCount < user.dailyMessageLimit;
+    return count < user.dailyMessageLimit;
+  },
+  async updateProfile(tenantId, id, updates, db) {
+    const current = await this.get(tenantId, id, db);
+    if (!current)
+      throw Object.assign(new Error("User not found"), { status: 404 });
+    const username = Object.hasOwn(updates, "username")
+      ? this.validations.username(
+          typeof updates.username === "string"
+            ? updates.username.trim().toLowerCase()
+            : updates.username
+        )
+      : current.username;
+    const bio = Object.hasOwn(updates, "bio")
+      ? this.validations.bio(updates.bio)
+      : current.bio;
+    const name = Object.hasOwn(updates, "name")
+      ? this.validations.name(updates.name)
+      : current.name;
+    const completingWechatRegistration =
+      current.wechatIdentity && !current.wechatRegistrationComplete;
+    if (
+      completingWechatRegistration &&
+      (!Object.hasOwn(updates, "name") ||
+        !Object.hasOwn(updates, "password") ||
+        !current.pfpFilename)
+    )
+      throw Object.assign(new Error("请先选择头像，并填写昵称和密码完成注册"), {
+          status: 400,
+        });
+    let passwordHash = current.passwordHash;
+    if (Object.hasOwn(updates, "password")) {
+      const check = this.checkPasswordComplexity(updates.password);
+      if (!check.checkedOK)
+        throw Object.assign(new Error(check.error), { status: 400 });
+      passwordHash = await require("bcryptjs").hash(updates.password, 12);
+    }
+    const user = await db.orm.users.update({
+      where: { id },
+      data: {
+        username,
+        name,
+        bio,
+        passwordHash,
+        ...(completingWechatRegistration
+          ? { wechatRegistrationComplete: true }
+          : {}),
+        authVersion:
+          current.authVersion + (passwordHash !== current.passwordHash ? 1 : 0),
+        updatedAt: new Date(),
+      },
+    });
+    return this.filterFields(user);
   },
 };
-
 module.exports = { User };

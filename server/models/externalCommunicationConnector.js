@@ -9,11 +9,11 @@ const ExternalCommunicationConnector = {
    * @param {'telegram'} type
    * @returns {Promise<{id: number, type: string, config: object, active: boolean}|null>}
    */
-  get: async function (type) {
+  get: async function (type, tenantId) {
     try {
       const connector =
         await prisma.external_communication_connectors.findUnique({
-          where: { type },
+          where: { tenantId_type: { tenantId, type } },
         });
       if (!connector) return null;
       return {
@@ -33,7 +33,8 @@ const ExternalCommunicationConnector = {
    * @param {boolean} active
    * @returns {Promise<{connector: object|null, error: string|null}>}
    */
-  upsert: async function (type, config = {}) {
+  upsert: async function (type, config = {}, tenantId) {
+    config = { ...config };
     if (!this.supportedTypes.includes(type))
       return { connector: null, error: `Unsupported connector type: ${type}` };
 
@@ -49,17 +50,38 @@ const ExternalCommunicationConnector = {
 
       update = Object.assign(update, {
         config: JSON.stringify(config),
+        botId: config.bot_id ? String(config.bot_id) : null,
         lastUpdatedAt: new Date(),
       });
       create = Object.assign(create, {
         config: JSON.stringify(config),
         type: String(type),
+        tenantId,
+        botId: config.bot_id ? String(config.bot_id) : null,
       });
 
-      const connector = await prisma.external_communication_connectors.upsert({
-        where: { type: String(type) },
-        update,
-        create,
+      const connector = await prisma.$transaction(async (tx) => {
+        const rows =
+          await tx.$queryRaw`SELECT id FROM external_communication_connectors WHERE "tenantId"=${tenantId} AND type=${type} FOR UPDATE`;
+        if (rows.length) {
+          const current = await tx.external_communication_connectors.findUnique(
+            { where: { id: rows[0].id } }
+          );
+          if (current.botId === update.botId) {
+            const live = safeJsonParse(current.config, {});
+            update.config = JSON.stringify({
+              ...config,
+              approved_users: live.approved_users || [],
+              voice_response_mode:
+                live.voice_response_mode || config.voice_response_mode,
+            });
+          }
+        }
+        return tx.external_communication_connectors.upsert({
+          where: { tenantId_type: { tenantId, type: String(type) } },
+          update,
+          create,
+        });
       });
       return {
         connector: {
@@ -80,13 +102,29 @@ const ExternalCommunicationConnector = {
    * @param {object} configUpdates - Partial config to merge.
    * @returns {Promise<{connector: object|null, error: string|null}>}
    */
-  updateConfig: async function (type, configUpdates = {}) {
-    const existing = await this.get(type);
-    if (!existing)
-      return { connector: null, error: `No ${type} connector found` };
-
-    const mergedConfig = { ...existing.config, ...configUpdates };
-    return this.upsert(type, mergedConfig, existing.active);
+  updateConfig: async function (type, configUpdates = {}, tenantId) {
+    return prisma.$transaction(async (tx) => {
+      // Serialize partial updates so a late state save cannot restore a revoked
+      // binding or overwrite a new Bot connection with stale configuration.
+      const rows =
+        await tx.$queryRaw`SELECT id FROM external_communication_connectors WHERE "tenantId"=${tenantId} AND type=${type} FOR UPDATE`;
+      if (!rows.length)
+        return { connector: null, error: `No ${type} connector found` };
+      const current = await tx.external_communication_connectors.findUnique({
+        where: { id: rows[0].id },
+      });
+      const config = safeJsonParse(current.config, {});
+      const updates =
+        typeof configUpdates === "function"
+          ? await configUpdates(config)
+          : configUpdates;
+      const merged = { ...config, ...updates };
+      const connector = await tx.external_communication_connectors.update({
+        where: { id: current.id },
+        data: { config: JSON.stringify(merged), lastUpdatedAt: new Date() },
+      });
+      return { connector: { ...connector, config: merged }, error: null };
+    });
   },
 
   /**
@@ -94,10 +132,10 @@ const ExternalCommunicationConnector = {
    * @param {'telegram'} type
    * @returns {Promise<boolean>}
    */
-  delete: async function (type) {
+  delete: async function (type, tenantId) {
     try {
       await prisma.external_communication_connectors.delete({
-        where: { type },
+        where: { tenantId_type: { tenantId, type } },
       });
       return true;
     } catch (error) {

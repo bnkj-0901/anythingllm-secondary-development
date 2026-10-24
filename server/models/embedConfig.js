@@ -19,11 +19,11 @@ const EmbedConfig = {
     "max_chats_per_day",
     "max_chats_per_session",
     "chat_mode",
-    "workspace_id",
+    "libraryId",
     "message_limit",
   ],
 
-  new: async function (data, creatorId = null) {
+  new: async function (data, creatorId, tenantId) {
     try {
       const embed = await prisma.embed_configs.create({
         data: {
@@ -58,10 +58,9 @@ const EmbedConfig = {
             data?.message_limit,
             "message_limit"
           ),
-          createdBy: creatorId != null ? Number(creatorId) : null,
-          workspace: {
-            connect: { id: Number(data.workspace_id) },
-          },
+          createdBy: String(creatorId),
+          tenantId,
+          libraryId: String(data.libraryId),
         },
       });
 
@@ -122,16 +121,18 @@ const EmbedConfig = {
     }
   },
 
-  getWithWorkspace: async function (clause = {}) {
+  getWithLibrary: async function (clause = {}) {
     try {
       const embedConfig = await prisma.embed_configs.findFirst({
         where: clause,
-        include: {
-          workspace: true,
-        },
       });
 
-      return embedConfig || null;
+      if (!embedConfig) return null;
+      const library = await prisma.ep_libraries.findUnique({
+        where: { id: embedConfig.libraryId },
+        select: { id: true, name: true },
+      });
+      return library ? { ...embedConfig, library } : null;
     } catch (error) {
       console.error(error.message);
       return null;
@@ -164,16 +165,11 @@ const EmbedConfig = {
     }
   },
 
-  whereWithWorkspace: async function (
-    clause = {},
-    limit = null,
-    orderBy = null
-  ) {
+  whereWithLibrary: async function (clause = {}, limit = null, orderBy = null) {
     try {
       const results = await prisma.embed_configs.findMany({
         where: clause,
         include: {
-          workspace: true,
           _count: {
             select: { embed_chats: true },
           },
@@ -181,7 +177,25 @@ const EmbedConfig = {
         ...(limit !== null ? { take: limit } : {}),
         ...(orderBy !== null ? { orderBy } : {}),
       });
-      return results;
+      return Promise.all(
+        results.map(async (embed) => {
+          const library = await prisma.ep_libraries.findUnique({
+            where: { id: embed.libraryId },
+            select: { id: true, name: true },
+          });
+          const tenant = await prisma.ep_tenants.findUnique({
+            where: { id: embed.tenantId },
+          });
+          const entry = tenant
+            ? await require("../enterprise/domains").tenantEntry(tenant)
+            : null;
+          return {
+            ...embed,
+            library: library || { id: embed.libraryId, name: "已删除知识库" },
+            webURL: entry?.webURL,
+          };
+        })
+      );
     } catch (error) {
       console.error(error.message);
       return [];
@@ -230,12 +244,14 @@ const BOOLEAN_KEYS = [
 const NUMBER_KEYS = [
   "max_chats_per_day",
   "max_chats_per_session",
-  "workspace_id",
+
   "message_limit",
 ];
 
 // Helper to validate a data object strictly into the proper format
 function validatedCreationData(value, field) {
+  if (field === "libraryId")
+    return typeof value === "string" && value ? value : null;
   if (field === "chat_mode") {
     if (!value || !VALID_CHAT_MODE.includes(value)) return "query";
     return value;

@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -14,15 +18,17 @@ const {
 class GroqLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.GROQ_API_KEY) throw new Error("No Groq API key was set.");
+    if (!env.GROQ_API_KEY) throw new Error("No Groq API key was set.");
     this.className = "GroqLLM";
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.groq.com/openai/v1",
-      apiKey: process.env.GROQ_API_KEY,
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.groq.com/openai/v1",
+        apiKey: env.GROQ_API_KEY,
+      })
+    );
     this.model =
-      modelPreference || process.env.GROQ_MODEL_PREF || "llama-3.1-8b-instant";
+      modelPreference || env.GROQ_MODEL_PREF || "llama-3.1-8b-instant";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

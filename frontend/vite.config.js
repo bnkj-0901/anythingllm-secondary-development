@@ -19,7 +19,10 @@ export default defineConfig({
   },
   server: {
     port: 3000,
-    host: "localhost"
+    host: "0.0.0.0",
+    proxy: {
+      "/api": { target: "http://127.0.0.1:3001", changeOrigin: false }
+    }
   },
   define: {
     "process.env": process.env

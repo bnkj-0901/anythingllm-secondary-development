@@ -25,7 +25,9 @@ function parseObsidianVaultPath(files = []) {
   }
 }
 
-async function loadObsidianVault({ files = [] }) {
+async function loadObsidianVault({ files = [] }, options = {}) {
+  const returnDocuments = options.returnDocuments === true;
+  const documents = [];
   if (!files || files?.length === 0)
     return { success: false, error: "No files provided" };
   const vaultName = parseObsidianVaultPath(files);
@@ -34,7 +36,7 @@ async function loadObsidianVault({ files = [] }) {
     ? slugify(`obsidian-vault-${vaultName}-${folderUUId}`).toLowerCase()
     : slugify(`obsidian-${folderUUId}`).toLowerCase();
   const outFolderPath = path.resolve(documentsFolder, outFolder);
-  if (!fs.existsSync(outFolderPath))
+  if (!returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
 
   console.log(
@@ -66,11 +68,13 @@ async function loadObsidianVault({ files = [] }) {
       const targetFileName = sanitizeFileName(
         `${slugify(file.name)}-${data.id}`
       );
-      writeToServerDocuments({
-        data,
-        filename: targetFileName,
-        destinationOverride: outFolderPath,
-      });
+      if (returnDocuments) documents.push(data);
+      else
+        writeToServerDocuments({
+          data,
+          filename: targetFileName,
+          destinationOverride: outFolderPath,
+        });
       results.push({ file: file.path, status: "success" });
     } catch (e) {
       console.error(`Failed to process ${file.path}:`, e);
@@ -80,6 +84,7 @@ async function loadObsidianVault({ files = [] }) {
 
   return {
     success: true,
+    ...(returnDocuments ? { documents } : {}),
     data: {
       processed: results.filter((r) => r.status === "success").length,
       failed: results.filter((r) => r.status === "failed").length,

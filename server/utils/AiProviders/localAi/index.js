@@ -1,3 +1,10 @@
+const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -12,19 +19,32 @@ const {
 
 class LocalAiLLM {
   /** @see LocalAiLLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.LOCAL_AI_BASE_PATH)
+    if (!env.LOCAL_AI_BASE_PATH)
       throw new Error("No LocalAI Base Path was set.");
 
     this.className = "LocalAiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: process.env.LOCAL_AI_BASE_PATH,
-      apiKey: process.env.LOCAL_AI_API_KEY ?? null,
-    });
-    this.model = modelPreference || process.env.LOCAL_AI_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: env.LOCAL_AI_BASE_PATH,
+        apiKey: env.LOCAL_AI_API_KEY ?? null,
+      })
+    );
+    this.model = modelPreference || env.LOCAL_AI_MODEL_PREF;
 
     this.embedder = embedder ?? new NativeEmbedder();
 
@@ -71,10 +91,10 @@ class LocalAiLLM {
       if (Object.keys(LocalAiLLM.modelContextWindows).length > 0 && !force)
         return;
 
-      const apiKey = process.env.LOCAL_AI_API_KEY ?? null;
+      const apiKey = env.LOCAL_AI_API_KEY ?? null;
       const headers = apiKey ? { Authorization: `Bearer ${apiKey}` } : {};
-      const { origin } = new URL(process.env.LOCAL_AI_BASE_PATH);
-      const { data: models = [] } = await fetch(`${origin}/v1/models`, {
+      const { origin } = new URL(env.LOCAL_AI_BASE_PATH);
+      const { data: models = [] } = await scopedFetch(`${origin}/v1/models`, {
         headers,
       }).then((res) => {
         if (!res.ok)
@@ -88,7 +108,7 @@ class LocalAiLLM {
       // never appear in the static config JSON.
       const estimates = await Promise.all(
         models.map(({ id }) =>
-          fetch(`${origin}/api/models/vram-estimate`, {
+          scopedFetch(`${origin}/api/models/vram-estimate`, {
             method: "POST",
             headers: { ...headers, "Content-Type": "application/json" },
             body: JSON.stringify({ model: id }),
@@ -130,7 +150,7 @@ class LocalAiLLM {
       this.#slog(
         "No context windows cached - Context window may be inaccurately reported."
       );
-      return Number(process.env.LOCAL_AI_MODEL_TOKEN_LIMIT) || 8192;
+      return Number(env.LOCAL_AI_MODEL_TOKEN_LIMIT) || 8192;
     }
 
     let userDefinedLimit = null;
@@ -138,11 +158,11 @@ class LocalAiLLM {
       Number(this.modelContextWindows[modelName]) || 8192;
 
     if (
-      process.env.LOCAL_AI_MODEL_TOKEN_LIMIT &&
-      !isNaN(Number(process.env.LOCAL_AI_MODEL_TOKEN_LIMIT)) &&
-      Number(process.env.LOCAL_AI_MODEL_TOKEN_LIMIT) > 0
+      env.LOCAL_AI_MODEL_TOKEN_LIMIT &&
+      !isNaN(Number(env.LOCAL_AI_MODEL_TOKEN_LIMIT)) &&
+      Number(env.LOCAL_AI_MODEL_TOKEN_LIMIT) > 0
     )
-      userDefinedLimit = Number(process.env.LOCAL_AI_MODEL_TOKEN_LIMIT);
+      userDefinedLimit = Number(env.LOCAL_AI_MODEL_TOKEN_LIMIT);
 
     // The user defined limit is always higher priority than the context window limit, but it cannot be higher than the context window limit
     // so we return the minimum of the two, if there is no user defined limit, we return the system defined limit as-is.

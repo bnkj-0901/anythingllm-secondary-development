@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -14,16 +18,16 @@ const {
 class MinimaxLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.MINIMAX_API_KEY)
-      throw new Error("No Minimax API key was set.");
+    if (!env.MINIMAX_API_KEY) throw new Error("No Minimax API key was set.");
     this.className = "MinimaxLLM";
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.minimax.io/v1",
-      apiKey: process.env.MINIMAX_API_KEY,
-    });
-    this.model =
-      modelPreference || process.env.MINIMAX_MODEL_PREF || "MiniMax-M2.7";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.minimax.io/v1",
+        apiKey: env.MINIMAX_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.MINIMAX_MODEL_PREF || "MiniMax-M2.7";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

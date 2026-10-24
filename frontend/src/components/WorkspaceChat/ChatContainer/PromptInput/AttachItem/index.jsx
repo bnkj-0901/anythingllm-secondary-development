@@ -19,6 +19,7 @@ import ParsedFilesMenu from "./ParsedFilesMenu";
 export default function AttachItem({
   workspaceSlug = null,
   workspaceThreadSlug = null,
+  resourceApi = Workspace,
 }) {
   const { t } = useTranslation();
   const { theme } = useTheme();
@@ -37,13 +38,15 @@ export default function AttachItem({
     if (!slug) return;
     if (isEmbedding) return;
     setIsLoading(true);
-    Workspace.getParsedFiles(slug, threadSlug)
+    resourceApi
+      .getParsedFiles(slug, threadSlug)
       .then(({ files, contextWindow, currentContextTokenCount }) => {
         setFiles(files);
         setShowTooltip(files.length > 0);
         setContextWindow(contextWindow);
         setCurrentTokens(currentContextTokenCount);
       })
+      .catch(() => setFiles([]))
       .finally(() => {
         setIsLoading(false);
       });
@@ -58,7 +61,7 @@ export default function AttachItem({
   async function handleRemoveAttachment(e) {
     const { document } = e.detail;
     if (!document?.id) return;
-    await Workspace.deleteParsedFiles(slug, [document.id]);
+    await resourceApi.deleteParsedFiles(slug, [document.id]);
     fetchFiles();
   }
 
@@ -134,6 +137,7 @@ export default function AttachItem({
           className="z-99 !w-[400px] !bg-theme-bg-primary !px-[5px] !rounded-lg !pointer-events-auto light:border-2 light:border-theme-modal-border"
         >
           <ParsedFilesMenu
+            resourceApi={resourceApi}
             onEmbeddingChange={setIsEmbedding}
             tooltipRef={tooltipRef}
             isLoading={isLoading}

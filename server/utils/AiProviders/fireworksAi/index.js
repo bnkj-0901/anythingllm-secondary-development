@@ -1,3 +1,8 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const fs = require("fs");
 const path = require("path");
 const { safeJsonParse } = require("../../http");
@@ -13,24 +18,27 @@ const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
 
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "fireworks")
     : path.resolve(__dirname, `../../../storage/models/fireworks`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 class FireworksAiLLM {
   constructor(embedder = null, modelPreference = null) {
     this.className = "FireworksAiLLM";
 
-    if (!process.env.FIREWORKS_AI_LLM_API_KEY)
+    if (!env.FIREWORKS_AI_LLM_API_KEY)
       throw new Error("No FireworksAI API key was set.");
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.fireworks.ai/inference/v1",
-      apiKey: process.env.FIREWORKS_AI_LLM_API_KEY ?? null,
-    });
-    this.model = modelPreference || process.env.FIREWORKS_AI_LLM_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.fireworks.ai/inference/v1",
+        apiKey: env.FIREWORKS_AI_LLM_API_KEY ?? null,
+      })
+    );
+    this.model = modelPreference || env.FIREWORKS_AI_LLM_MODEL_PREF;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -39,10 +47,10 @@ class FireworksAiLLM {
 
     this.embedder = !embedder ? new NativeEmbedder() : embedder;
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
   }
 
   log(text, ...args) {
@@ -102,7 +110,7 @@ class FireworksAiLLM {
   }
 
   static promptWindowLimit(modelName) {
-    const cacheModelPath = path.resolve(cacheFolder, "models.json");
+    const cacheModelPath = path.resolve(cacheFolder(), "models.json");
     const availableModels = fs.existsSync(cacheModelPath)
       ? safeJsonParse(
           fs.readFileSync(cacheModelPath, { encoding: "utf-8" }),
@@ -224,12 +232,14 @@ class FireworksAiLLM {
 }
 
 async function fireworksAiModels(providedApiKey = null) {
-  const apiKey = providedApiKey || process.env.FIREWORKS_AI_LLM_API_KEY || null;
+  const apiKey = providedApiKey || env.FIREWORKS_AI_LLM_API_KEY || null;
   const { OpenAI: OpenAIApi } = require("openai");
-  const client = new OpenAIApi({
-    baseURL: "https://api.fireworks.ai/inference/v1",
-    apiKey: apiKey,
-  });
+  const client = new OpenAIApi(
+    sdkOptions({
+      baseURL: "https://api.fireworks.ai/inference/v1",
+      apiKey: apiKey,
+    })
+  );
 
   return await client.models
     .list()
@@ -255,17 +265,17 @@ async function fireworksAiModels(providedApiKey = null) {
       }
 
       // Cache all response information
-      if (!fs.existsSync(cacheFolder))
-        fs.mkdirSync(cacheFolder, { recursive: true });
+      if (!fs.existsSync(cacheFolder()))
+        fs.mkdirSync(cacheFolder(), { recursive: true });
       fs.writeFileSync(
-        path.resolve(cacheFolder, "models.json"),
+        path.resolve(cacheFolder(), "models.json"),
         JSON.stringify(validModels),
         {
           encoding: "utf-8",
         }
       );
       fs.writeFileSync(
-        path.resolve(cacheFolder, ".cached_at"),
+        path.resolve(cacheFolder(), ".cached_at"),
         String(Number(new Date())),
         {
           encoding: "utf-8",

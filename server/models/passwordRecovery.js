@@ -17,13 +17,9 @@ const RecoveryCode = {
       return { recoveryCode: null, error: error.message };
     }
   },
-  createMany: async function (data) {
+  createMany: async function (data, client = prisma) {
     try {
-      const recoveryCodes = await prisma.$transaction(
-        data.map((recoveryCode) =>
-          prisma.recovery_codes.create({ data: recoveryCode })
-        )
-      );
+      const recoveryCodes = await client.recovery_codes.createMany({ data });
       return { recoveryCodes, error: null };
     } catch (error) {
       console.error("FAILED TO CREATE RECOVERY CODES.", error.message);
@@ -52,20 +48,20 @@ const RecoveryCode = {
       return null;
     }
   },
-  deleteMany: async function (clause = {}) {
+  deleteMany: async function (clause = {}, client = prisma) {
     try {
-      await prisma.recovery_codes.deleteMany({ where: clause });
+      await client.recovery_codes.deleteMany({ where: clause });
       return true;
     } catch (error) {
       console.error("FAILED TO DELETE RECOVERY CODES.", error.message);
       return false;
     }
   },
-  hashesForUser: async function (userId = null) {
+  hashesForUser: async function (userId = null, client = prisma) {
     if (!userId) return [];
-    return (await this.findMany({ user_id: userId })).map(
-      (recovery) => recovery.code_hash
-    );
+    return (
+      await client.recovery_codes.findMany({ where: { user_id: userId } })
+    ).map((recovery) => recovery.code_hash);
   },
 };
 
@@ -76,9 +72,9 @@ const PasswordResetToken = {
   calcExpiry: function () {
     return new Date(Date.now() + this.resetExpiryMs);
   },
-  create: async function (userId) {
+  create: async function (userId, client = prisma) {
     try {
-      const passwordResetToken = await prisma.password_reset_tokens.create({
+      const passwordResetToken = await client.password_reset_tokens.create({
         data: { user_id: userId, token: v4(), expiresAt: this.calcExpiry() },
       });
       return { passwordResetToken, error: null };
@@ -87,9 +83,9 @@ const PasswordResetToken = {
       return { passwordResetToken: null, error: error.message };
     }
   },
-  findUnique: async function (clause = {}) {
+  findUnique: async function (clause = {}, client = prisma) {
     try {
-      const passwordResetToken = await prisma.password_reset_tokens.findUnique({
+      const passwordResetToken = await client.password_reset_tokens.findUnique({
         where: clause,
       });
       return passwordResetToken;
@@ -98,9 +94,9 @@ const PasswordResetToken = {
       return null;
     }
   },
-  deleteMany: async function (clause = {}) {
+  deleteMany: async function (clause = {}, client = prisma) {
     try {
-      await prisma.password_reset_tokens.deleteMany({ where: clause });
+      await client.password_reset_tokens.deleteMany({ where: clause });
       return true;
     } catch (error) {
       console.error("FAILED TO DELETE PASSWORD RESET TOKEN.", error.message);

@@ -14,9 +14,17 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * This will also boot all MCP servers if they have not been started yet.
    * @returns {Promise<string[]>} Array of flow names in @@mcp_{name} format
    */
-  async activeMCPServers() {
+  permittedServer(name, ctx) {
+    const config = this.mcpServerConfigs.find(item => item.name === name);
+    if (!config) return false;
+    const owner = config.server.anythingllm?.tenantId;
+    return !owner || ctx?.identity === "platform" || owner === ctx?.tenantId;
+  }
+
+  async activeMCPServers(ctx = null) {
     await this.bootMCPServers();
-    return Object.keys(this.mcps).flatMap((name) => `@@mcp_${name}`);
+    return Object.keys(this.mcps).filter(name => this.permittedServer(name, ctx))
+      .flatMap((name) => `@@mcp_${name}`);
   }
 
   /**
@@ -26,6 +34,8 @@ class MCPCompatibilityLayer extends MCPHypervisor {
    * @returns {Promise<{name: string, description: string, plugin: Function}[]|null>} Array of plugin configurations or null if not found
    */
   async convertServerToolsToPlugins(name, _aibitat = null) {
+    const invocationIdentity = _aibitat?.handlerProps?.ctx || _aibitat?.handlerProps?.context;
+    if (!this.permittedServer(name, invocationIdentity)) return null;
     const mcp = this.mcps[name];
     if (!mcp) return null;
 
@@ -77,7 +87,11 @@ class MCPCompatibilityLayer extends MCPHypervisor {
                 },
                 handler: async function (args = {}) {
                   try {
+                    const identity = invocationIdentity || require("../../enterprise/execution-context").executionContext();
+                    await require("../../enterprise/auth").refreshContext(identity);
                     const mcpLayer = new MCPCompatibilityLayer();
+                    if (!mcpLayer.permittedServer(name, identity))
+                      throw new Error("MCP connection belongs to another enterprise");
                     const currentMcp = mcpLayer.mcps[name];
                     if (!currentMcp)
                       throw new Error(

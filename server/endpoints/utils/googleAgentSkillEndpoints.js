@@ -1,6 +1,4 @@
-const {
-  isSingleUserMode,
-} = require("../../utils/middleware/multiUserProtected");
+const { requireTenantConfiguration } = require("../../enterprise/settings");
 const { validatedRequest } = require("../../utils/middleware/validatedRequest");
 const { GmailBridge } = require("../../utils/agents/aibitat/plugins/gmail/lib");
 const {
@@ -12,7 +10,7 @@ function googleAgentSkillEndpoints(app) {
 
   app.get(
     "/admin/agent-skills/gmail/status",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, requireTenantConfiguration],
     async (_request, response) => {
       try {
         const config = await GmailBridge.getConfig();
@@ -40,7 +38,7 @@ function googleAgentSkillEndpoints(app) {
 
   app.get(
     "/admin/agent-skills/google-calendar/status",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, requireTenantConfiguration],
     async (_request, response) => {
       try {
         const config = await GoogleCalendarBridge.getConfig();

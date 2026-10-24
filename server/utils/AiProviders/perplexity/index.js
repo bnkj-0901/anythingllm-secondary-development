@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { v4: uuidv4 } = require("uuid");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { isAbortError } = require("../../helpers/abortSignals");
@@ -21,21 +25,23 @@ function perplexityModels() {
 
 class PerplexityLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.PERPLEXITY_API_KEY)
+    if (!env.PERPLEXITY_API_KEY)
       throw new Error("No Perplexity API key was set.");
 
     this.className = "PerplexityLLM";
     const { OpenAI: OpenAIApi } = require("openai");
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.perplexity.ai",
-      apiKey: process.env.PERPLEXITY_API_KEY ?? null,
-      defaultHeaders: {
-        "X-Pplx-Integration": getAnythingLLMUserAgent(),
-      },
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.perplexity.ai",
+        apiKey: env.PERPLEXITY_API_KEY ?? null,
+        defaultHeaders: {
+          "X-Pplx-Integration": getAnythingLLMUserAgent(),
+        },
+      })
+    );
     this.model =
       modelPreference ||
-      process.env.PERPLEXITY_MODEL_PREF ||
+      env.PERPLEXITY_MODEL_PREF ||
       "llama-3-sonar-large-32k-online"; // Give at least a unique model to the provider as last fallback.
     this.limits = {
       history: this.promptWindowLimit() * 0.15,

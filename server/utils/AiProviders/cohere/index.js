@@ -1,3 +1,8 @@
+const {
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { MODEL_MAP } = require("../modelMap");
 const {
@@ -14,17 +19,18 @@ const {
 class CohereLLM {
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.COHERE_API_KEY)
-      throw new Error("No Cohere API key was set.");
+    if (!env.COHERE_API_KEY) throw new Error("No Cohere API key was set.");
     this.className = "CohereLLM";
 
     // Cohere exposes an OpenAI-compatible API which lets us reuse the OpenAI SDK
     // across the app instead of the cohere-ai package. https://docs.cohere.com/docs/compatibility-api
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.cohere.ai/compatibility/v1",
-      apiKey: process.env.COHERE_API_KEY,
-    });
-    this.model = modelPreference || process.env.COHERE_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.cohere.ai/compatibility/v1",
+        apiKey: env.COHERE_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.COHERE_MODEL_PREF;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -158,13 +164,12 @@ class CohereLLM {
    */
   async getModelCapabilities() {
     try {
-      if (!process.env.COHERE_API_KEY)
-        throw new Error("No Cohere API key was set.");
-      const features = await fetch(
+      if (!env.COHERE_API_KEY) throw new Error("No Cohere API key was set.");
+      const features = await scopedFetch(
         `https://api.cohere.com/v1/models/${this.model}`,
         {
           method: "GET",
-          headers: { Authorization: `Bearer ${process.env.COHERE_API_KEY}` },
+          headers: { Authorization: `Bearer ${env.COHERE_API_KEY}` },
         }
       )
         .then((res) => {

@@ -1,6 +1,72 @@
 # How to use Dockerized Anything LLM
 
-Use the Dockerized version of AnythingLLM for a much faster and complete startup of AnythingLLM.
+## Current SaaS deployment
+
+Run these steps from this repository's root. Compose builds this project's image
+and runs Frontend static assets, Server and Collector in one application
+container. PostgreSQL is an existing external service; `uniapp` is deployed
+separately.
+
+1. Copy `docker/.env.example` to `docker/.env` if the file does not already exist.
+   Set `DATABASE_URL` to the project's PostgreSQL database. From Docker, a
+   database on the host uses `host.docker.internal`, rather than `localhost`.
+2. Set stable, independent `JWT_SECRET`, `SIG_KEY` and `SIG_SALT` values. Configure
+   `PLATFORM_HOSTS` for the platform entry. For local HTTP testing at
+   `http://localhost:3000`, set `PLATFORM_HOSTS=localhost,127.0.0.1`,
+   `TENANT_WEB_PROTOCOL=http` and `TENANT_WEB_PORT=3000`. Set
+   `TENANT_BASE_DOMAIN=localhost` to allocate local default tenant domains, or
+   register complete tenant hostnames explicitly in the application.
+   `TENANT_BASE_DOMAIN` only allocates a default hostname during provisioning.
+   For production, use the actual platform domain in `PLATFORM_HOSTS` and open
+   that domain for administrator login.
+3. Ensure the mounted storage directory is writable by the configured UID/GID.
+   The default is `server/storage`; `SERVER_STORAGE_PATH` can select another
+   persistent host directory. Then build and start:
+
+```shell
+docker compose --env-file docker/.env --file docker/docker-compose.yml build
+docker compose --env-file docker/.env --file docker/docker-compose.yml up --detach --no-build
+docker compose --env-file docker/.env --file docker/docker-compose.yml ps
+```
+
+The entrypoint runs `node prisma/init.js` (`prisma migrate deploy`) before
+`server/index.js` starts; Collector uses `collector/index.js`. A single
+`server/prisma/schema.prisma` and baseline generate the standard
+`@prisma/client`. The current baseline creates 40 product tables, including
+tenant-owned `users`, `chat_threads`/`chats`, knowledge metadata and retained
+shared settings and the retained Agent, memory, router, external access and job models. Workspace membership and the upstream SQLite seed are not
+initialized. Initialization creates the first top administrator once, without
+sample tenants or users. Set `INITIAL_ADMIN_USERNAME` and `INITIAL_ADMIN_PASSWORD`
+in deployment configuration; if no password is supplied, read the generated
+credentials from the persisted `storage/initial-admin.json` file. Restarts never
+reset an existing account. Open `http://localhost:3000` for platform login,
+then provision a tenant and its administrator. Each tenant has
+exactly one unique `ep_tenants.hostname`; requests resolve it from Host. The
+container healthcheck checks both Server and Collector.
+
+PostgreSQL holds business data and text/index metadata; uploaded originals live
+in the mounted storage directory, and vectors remain in LanceDB or the selected
+remote vector backend. Keep their backups and encryption/signing keys together.
+
+This pre-release development build initializes an empty database directly with
+only the `20261022000100_saas_postgres` baseline. The original `users`,
+`chat_threads` and `chats` retain integer auto-increment IDs and native date
+columns. It provides no upgrade path
+from earlier development databases, seed or data transfer. Start with empty
+business storage as well. This build has no second SQLite schema or importer.
+After the first production release, schema changes use incremental migrations;
+back up PostgreSQL and persistent storage before those upgrades.
+
+Vector operations extend the original providers through `records()`. A backend
+configuration change does not copy indexes automatically: existing records must
+already be accessible from the proposed configuration, or indexes need a
+separately planned rebuild. PostgreSQL business migrations do not migrate vectors.
+
+## Upstream deployment reference
+
+The remaining upstream image examples are retained for reference. They deploy
+`mintplexlabs/anythingllm`, not this SaaS build. For this repository use the
+Compose steps above, same-origin `/api` requests, and the PostgreSQL setup.
 
 ### Minimum Requirements
 
@@ -287,12 +353,14 @@ health output says `gpu` for any Vulkan backend, so it does not tell you whether
 ## Build locally from source _not recommended for casual use_
 
 - `git clone` this repo and `cd anything-llm` to get to the root directory.
-- `touch server/storage/anythingllm.db` to create empty SQLite DB file.
 - `cd docker/`
 - `cp .env.example .env` **you must do this before building**
-- `docker-compose up -d --build` to build the image - this will take a few moments.
+- Set `DATABASE_URL` in `.env` to an existing PostgreSQL database (URL-encode the password). Use `host.docker.internal:5432` for PostgreSQL exposed on the Docker host. This Compose file does not create or delete PostgreSQL containers or databases.
+- Keep the existing `SIG_KEY`, `SIG_SALT`, and `JWT_SECRET` when moving an existing installation so encrypted configuration and sessions remain valid.
+- For local Docker without a TLS reverse proxy, set `TENANT_WEB_PROTOCOL=http`. Production defaults to `https`; public deployments should use HTTPS at the ingress.
+- `docker compose up -d --build` builds and starts the server, Collector, and static frontend in one container. The separate `uniapp` client is not deployed by this Compose file.
 
-Your docker host will show the image as online once the build process is completed. This will build the app to `http://localhost:3001`.
+Your docker host will show the image as online once the build process is completed. Open `http://localhost:3000`; set `APP_PORT` in `.env` to change this host port. The server continues to listen on port 3001 inside the container. `SERVER_STORAGE_PATH` optionally selects the host storage folder; its default is `../server/storage` relative to `docker/`.
 
 ## Integrations and one-click setups
 
@@ -324,16 +392,13 @@ Then in docker you need to replace that localhost part with `host.docker.interna
 
 ### API is not working, cannot login, LLM is "offline"?
 
-You are likely running the docker container on a remote machine like EC2 or some other instance where the reachable URL
-is not `http://localhost:3001` and instead is something like `http://193.xx.xx.xx:3001` - in this case all you need to do is add the following to your `frontend/.env.production` before running `docker-compose up -d --build`
-
-```
-# frontend/.env.production
-GENERATE_SOURCEMAP=false
-VITE_API_BASE="http://<YOUR_REACHABLE_IP_ADDRESS>:3001/api"
-```
-
-For example, if the docker instance is available on `192.186.1.222` your `VITE_API_BASE` would look like `VITE_API_BASE="http://192.186.1.222:3001/api"` in `frontend/.env.production`.
+This SaaS build always requests `/api` on the current browser origin;
+`VITE_API_BASE` does not change its API address. Serve the frontend and `/api`
+through the same domain, and preserve the external `Host` in the reverse proxy.
+The platform hostname must match `PLATFORM_HOSTS`; each tenant hostname must
+have an active database binding created through platform management. Check the
+container health and proxy routing before changing model settings. For local
+Docker, use the platform Host values in the deployment steps above.
 
 ### Having issues with Ollama?
 

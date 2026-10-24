@@ -172,19 +172,19 @@ class ModelRouterService {
    * @param {Object|null} user
    * @param {Object|null} thread
    */
-  static resetForWorkspace(workspace, user = null, thread = null) {
-    if (!workspace?.router_id) return;
+  static resetForConversation(ctx, threadId, configuration = {}) {
+    if (!configuration.router_id) return;
     const svc = ModelRouterService.getInstance();
     const key = svc.routeCacheKey(
-      user?.id ?? null,
-      workspace.slug,
-      thread?.slug ?? null
+      ctx.userId,
+      ctx.tenantId,
+      threadId
     );
     svc.stickyRoutes.delete(key);
     svc.llmCache.delete(key);
     svc.lastNotifiedRoute.delete(key);
     svc.log(
-      `Reset routing state for key "${key}" (workspace: ${workspace.slug})`
+      `Reset routing state for key "${key}"`
     );
   }
 
@@ -325,81 +325,46 @@ class ModelRouterService {
    * }>}
    */
   static async gatherRoutingContext({
-    workspace,
-    user = null,
+    ctx,
+    configuration = {},
     thread = null,
     message = "",
     chatHistoryOverride = null,
     messageCountOverride = null,
-    apiSessionId = null,
   }) {
-    const { chatPrompt, recentChatHistory } = require("../chats");
-    const { DocumentManager } = require("../DocumentManager");
-    const {
-      WorkspaceParsedFiles,
-    } = require("../../models/workspaceParsedFiles");
+    const { Chat } = require("../../models/workspaceChats");
+    const { convertToPromptHistory } = require("../helpers/chat/responses");
+    const { ParsedFiles } = require("../../models/workspaceParsedFiles");
     const { TokenManager } = require("../helpers/tiktoken");
-
-    const messageLimit = workspace?.openAiHistory || 20;
-
-    const { rawHistory, chatHistory } = chatHistoryOverride
-      ? chatHistoryOverride
-      : await recentChatHistory({
-          user,
-          workspace,
-          thread,
-          messageLimit,
-          apiSessionId,
-        });
-
-    const systemPrompt = await chatPrompt(workspace, user, {
-      prompt: message,
-      rawHistory,
-    });
-
-    const pinnedDocs = await new DocumentManager({ workspace }).pinnedDocs();
-    const parsedFiles = await WorkspaceParsedFiles.getContextFiles(
-      workspace,
-      thread || null,
-      user || null
-    );
-
-    const contextTexts = [
-      ...pinnedDocs.map((doc) => doc.pageContent),
-      ...parsedFiles.map((doc) => doc.pageContent),
-    ];
-
-    const tokenManager = new TokenManager();
-    const systemTokens = tokenManager.countFromString(systemPrompt);
-    const contextTokens = contextTexts.reduce(
-      (sum, text) => sum + tokenManager.countFromString(text || ""),
-      0
-    );
-    const historyTokens = chatHistory.reduce(
-      (sum, msg) => sum + tokenManager.countFromString(msg.content || ""),
-      0
-    );
-    const messageTokens = tokenManager.countFromString(message);
-
-    // Use the true DB count for message count rather than the capped
-    // chatHistory length, so routing rules based on conversation length
-    // evaluate against the real total. +1 to include the current in-flight
-    // message so ">=3" fires on the user's 3rd message, not the 4th.
-    let conversationMessageCount;
-    if (messageCountOverride != null) {
-      conversationMessageCount = messageCountOverride;
-    } else {
-      const { WorkspaceChats } = require("../../models/workspaceChats");
-      const countClause = {
-        workspaceId: workspace.id,
-        user_id: user?.id || null,
-        thread_id: thread?.id || null,
-        api_session_id: apiSessionId || null,
-      };
-      if (!apiSessionId) countClause.include = true;
-      conversationMessageCount = (await WorkspaceChats.count(countClause)) + 1;
-    }
-
+    const identity =
+      ctx || require("../../enterprise/execution-context").executionContext();
+    if (!identity)
+      throw new Error("Model routing requires an execution identity.");
+    const rawHistory =
+      chatHistoryOverride?.rawHistory ||
+      (thread?.id
+        ? await Chat.forThread(identity, thread.id, {
+            include: true,
+            limit: configuration.openAiHistory || 20,
+            orderBy: { id: "desc" },
+          }).then((rows) => rows.reverse())
+        : []);
+    const chatHistory =
+      chatHistoryOverride?.chatHistory || convertToPromptHistory(rawHistory);
+    const systemPrompt =
+      await require("../../enterprise/settings").defaultPrompt(identity);
+    const parsedFiles = thread?.id
+      ? await ParsedFiles.getContextFiles(identity, thread.id)
+      : [];
+    const pinnedDocs = await require("../../models/documents").Document.pinnedContext(identity);
+    const contextTexts = [...parsedFiles, ...pinnedDocs].map((file) => file.pageContent);
+    const tokenizer = new TokenManager();
+    const count = (value) => tokenizer.countFromString(value || "");
+    const conversationMessageCount =
+      messageCountOverride ??
+      (thread?.id
+        ? await Chat.count(identity, { thread_id: thread.id, include: true })
+        : 0) + 1;
     return {
       rawHistory,
       chatHistory,
@@ -408,7 +373,10 @@ class ModelRouterService {
       pinnedDocs,
       parsedFiles,
       conversationTokenCount:
-        systemTokens + contextTokens + historyTokens + messageTokens,
+        count(systemPrompt) +
+        contextTexts.reduce((sum, text) => sum + count(text), 0) +
+        chatHistory.reduce((sum, item) => sum + count(item.content), 0) +
+        count(message),
       conversationMessageCount,
     };
   }

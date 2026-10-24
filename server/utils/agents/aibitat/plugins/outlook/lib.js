@@ -801,7 +801,7 @@ class OutlookBridge {
   async initialize() {
     try {
       const isMultiUser = await SystemSettings.isMultiUserMode();
-      if (isMultiUser) {
+      if (isMultiUser && !SystemSettings.hasTenantConfiguration()) {
         return {
           success: false,
           error:
@@ -865,7 +865,7 @@ class OutlookBridge {
    */
   static async isToolAvailable() {
     const isMultiUser = await SystemSettings.isMultiUserMode();
-    if (isMultiUser) return false;
+    if (isMultiUser && !SystemSettings.hasTenantConfiguration()) return false;
 
     const config = await OutlookBridge.getConfig();
 
@@ -1410,7 +1410,7 @@ class OutlookBridge {
   }
 }
 
-module.exports = new OutlookBridge();
+module.exports = SystemSettings.tenantBridge(OutlookBridge);
 module.exports.OutlookBridge = OutlookBridge;
 module.exports.prepareAttachment = prepareAttachment;
 module.exports.parseAttachment = parseAttachment;

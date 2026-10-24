@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -13,17 +17,17 @@ const {
 
 class XAiLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.XAI_LLM_API_KEY)
-      throw new Error("No xAI API key was set.");
+    if (!env.XAI_LLM_API_KEY) throw new Error("No xAI API key was set.");
     this.className = "XAiLLM";
     const { OpenAI: OpenAIApi } = require("openai");
 
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.x.ai/v1",
-      apiKey: process.env.XAI_LLM_API_KEY,
-    });
-    this.model =
-      modelPreference || process.env.XAI_LLM_MODEL_PREF || "grok-beta";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.x.ai/v1",
+        apiKey: env.XAI_LLM_API_KEY,
+      })
+    );
+    this.model = modelPreference || env.XAI_LLM_MODEL_PREF || "grok-beta";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,

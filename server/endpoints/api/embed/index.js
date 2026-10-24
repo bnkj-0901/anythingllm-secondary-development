@@ -2,12 +2,13 @@ const { EmbedConfig } = require("../../../models/embedConfig");
 const { EmbedChats } = require("../../../models/embedChats");
 const { validApiKey } = require("../../../utils/middleware/validApiKey");
 const { reqBody } = require("../../../utils/http");
-const { Workspace } = require("../../../models/workspace");
+const prisma = require("../../../utils/prisma");
+const { manager } = require("../../../utils/middleware/externalIdentity");
 
 function apiEmbedEndpoints(app) {
   if (!app) return;
 
-  app.get("/v1/embed", [validApiKey], async (request, response) => {
+  app.get("/v1/embed", [validApiKey, manager], async (request, response) => {
     /*
       #swagger.tags = ['Embed']
       #swagger.description = 'List all active embeds'
@@ -24,9 +25,9 @@ function apiEmbedEndpoints(app) {
                     "enabled": true,
                     "chat_mode": "query",
                     "createdAt": "2023-04-01T12:00:00Z",
-                    "workspace": {
+                    "library": {
                       "id": 1,
-                      "name": "Workspace 1"
+                      "name": "Published knowledge"
                     },
                     "chat_count": 10
                   },
@@ -36,9 +37,9 @@ function apiEmbedEndpoints(app) {
                     "enabled": false,
                     "chat_mode": "chat",
                     "createdAt": "2023-04-02T14:30:00Z",
-                    "workspace": {
+                    "library": {
                       "id": 1,
-                      "name": "Workspace 1"
+                      "name": "Published knowledge"
                     },
                     "chat_count": 10
                   }
@@ -55,17 +56,16 @@ function apiEmbedEndpoints(app) {
       }
     */
     try {
-      const embeds = await EmbedConfig.whereWithWorkspace();
+      const embeds = await EmbedConfig.whereWithLibrary({
+        tenantId: request.ep.tenantId,
+      });
       const filteredEmbeds = embeds.map((embed) => ({
         id: embed.id,
         uuid: embed.uuid,
         enabled: embed.enabled,
         chat_mode: embed.chat_mode,
         createdAt: embed.createdAt,
-        workspace: {
-          id: embed.workspace.id,
-          name: embed.workspace.name,
-        },
+        library: embed.library,
         chat_count: embed._count.embed_chats,
       }));
       response.status(200).json({ embeds: filteredEmbeds });
@@ -77,7 +77,7 @@ function apiEmbedEndpoints(app) {
 
   app.get(
     "/v1/embed/:embedUuid/chats",
-    [validApiKey],
+    [validApiKey, manager],
     async (request, response) => {
       /*
       #swagger.tags = ['Embed']
@@ -127,7 +127,10 @@ function apiEmbedEndpoints(app) {
       try {
         const { embedUuid } = request.params;
         const chats = await EmbedChats.where({
-          embed_config: { uuid: String(embedUuid) },
+          embed_config: {
+            uuid: String(embedUuid),
+            tenantId: request.ep.tenantId,
+          },
         });
         response.status(200).json({ chats });
       } catch (e) {
@@ -139,7 +142,7 @@ function apiEmbedEndpoints(app) {
 
   app.get(
     "/v1/embed/:embedUuid/chats/:sessionUuid",
-    [validApiKey],
+    [validApiKey, manager],
     async (request, response) => {
       /*
       #swagger.tags = ['Embed']
@@ -187,7 +190,10 @@ function apiEmbedEndpoints(app) {
       try {
         const { embedUuid, sessionUuid } = request.params;
         const chats = await EmbedChats.where({
-          embed_config: { uuid: String(embedUuid) },
+          embed_config: {
+            uuid: String(embedUuid),
+            tenantId: request.ep.tenantId,
+          },
           session_id: String(sessionUuid),
         });
         response.status(200).json({ chats });
@@ -198,8 +204,11 @@ function apiEmbedEndpoints(app) {
     }
   );
 
-  app.post("/v1/embed/new", [validApiKey], async (request, response) => {
-    /*
+  app.post(
+    "/v1/embed/new",
+    [validApiKey, manager],
+    async (request, response) => {
+      /*
       #swagger.tags = ['Embed']
       #swagger.description = 'Create a new embed configuration'
       #swagger.requestBody = {
@@ -210,7 +219,7 @@ function apiEmbedEndpoints(app) {
             schema: {
               type: 'object',
               example: {
-                "workspace_slug": "workspace-slug-1",
+                "libraryId": "public-library-id",
                 "chat_mode": "chat",
                 "allowlist_domains": ["example.com"],
                 "allow_model_override": false,
@@ -241,7 +250,7 @@ function apiEmbedEndpoints(app) {
                   "max_chats_per_day": 100,
                   "max_chats_per_session": 10,
                   "createdAt": "2023-04-01T12:00:00Z",
-                  "workspace_slug": "workspace-slug-1"
+                  "libraryId": "public-library-id"
                 },
                 "error": null
               }
@@ -255,37 +264,40 @@ function apiEmbedEndpoints(app) {
         }
       }
       #swagger.responses[404] = {
-        description: "Workspace not found"
+        description: "Public knowledge library not found"
       }
     */
-    try {
-      const data = reqBody(request);
+      try {
+        const data = reqBody(request);
 
-      if (!data.workspace_slug)
-        return response
-          .status(400)
-          .json({ error: "Workspace slug is required" });
-      const workspace = await Workspace.get({
-        slug: String(data.workspace_slug),
-      });
+        if (
+          typeof data.libraryId !== "string" ||
+          !(await prisma.ep_library_grants.findFirst({
+            where: { libraryId: data.libraryId, tenantId: request.ep.tenantId },
+          }))
+        )
+          return response
+            .status(400)
+            .json({ error: "Choose an enterprise public library to publish" });
+        const { embed, message: error } = await EmbedConfig.new(
+          data,
+          request.ep.userId,
+          request.ep.tenantId
+        );
 
-      if (!workspace)
-        return response.status(404).json({ error: "Workspace not found" });
-
-      const { embed, message: error } = await EmbedConfig.new({
-        ...data,
-        workspace_id: workspace.id,
-      });
-
-      response.status(200).json({ embed, error });
-    } catch (e) {
-      console.error(e.message, e);
-      response.sendStatus(500).end();
+        response.status(200).json({ embed, error });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
+      }
     }
-  });
+  );
 
-  app.post("/v1/embed/:embedUuid", [validApiKey], async (request, response) => {
-    /*
+  app.post(
+    "/v1/embed/:embedUuid",
+    [validApiKey, manager],
+    async (request, response) => {
+      /*
       #swagger.tags = ['Embed']
       #swagger.description = 'Update an existing embed configuration'
       #swagger.parameters['embedUuid'] = {
@@ -337,26 +349,39 @@ function apiEmbedEndpoints(app) {
         description: "Embed not found"
       }
     */
-    try {
-      const { embedUuid } = request.params;
-      const data = reqBody(request);
+      try {
+        const { embedUuid } = request.params;
+        const data = reqBody(request);
 
-      const embed = await EmbedConfig.get({ uuid: String(embedUuid) });
-      if (!embed) {
-        return response.status(404).json({ error: "Embed not found" });
+        const embed = await EmbedConfig.get({
+          uuid: String(embedUuid),
+          tenantId: request.ep.tenantId,
+        });
+        if (!embed) {
+          return response.status(404).json({ error: "Embed not found" });
+        }
+
+        if (
+          data.libraryId !== undefined &&
+          !(await prisma.ep_library_grants.findFirst({
+            where: { libraryId: data.libraryId, tenantId: request.ep.tenantId },
+          }))
+        )
+          return response
+            .status(400)
+            .json({ error: "Choose an enterprise public library to publish" });
+        const { success, error } = await EmbedConfig.update(embed.id, data);
+        response.status(200).json({ success, error });
+      } catch (e) {
+        console.error(e.message, e);
+        response.sendStatus(500).end();
       }
-
-      const { success, error } = await EmbedConfig.update(embed.id, data);
-      response.status(200).json({ success, error });
-    } catch (e) {
-      console.error(e.message, e);
-      response.sendStatus(500).end();
     }
-  });
+  );
 
   app.delete(
     "/v1/embed/:embedUuid",
-    [validApiKey],
+    [validApiKey, manager],
     async (request, response) => {
       /*
       #swagger.tags = ['Embed']
@@ -391,7 +416,10 @@ function apiEmbedEndpoints(app) {
     */
       try {
         const { embedUuid } = request.params;
-        const embed = await EmbedConfig.get({ uuid: String(embedUuid) });
+        const embed = await EmbedConfig.get({
+          uuid: String(embedUuid),
+          tenantId: request.ep.tenantId,
+        });
         if (!embed)
           return response.status(404).json({ error: "Embed not found" });
         const success = await EmbedConfig.delete({ id: embed.id });

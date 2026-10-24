@@ -1,35 +1,8 @@
-const { Workspace } = require("../../../../../models/workspace");
-const { WorkspaceThread } = require("../../../../../models/workspaceThread");
-
-/**
- * /new - Creates a new thread in the current workspace.
- * @param {import("../index").BotContext} ctx
- * @param {number} chatId
- */
+const { ChatThread } = require("../../../../../models/workspaceThread");
 async function handleNewThread(ctx, chatId) {
-  const state = ctx.getState(chatId);
-  const workspace = await Workspace.get({ slug: state.workspaceSlug });
-  if (!workspace) {
-    await ctx.bot.sendMessage(chatId, "No workspace configured.");
-    return;
-  }
-
-  const { thread, message: error } = await WorkspaceThread.new(
-    workspace,
-    null,
-    { name: "Telegram Thread" }
-  );
-
-  if (error || !thread) {
-    await ctx.bot.sendMessage(chatId, "Failed to create thread.");
-    return;
-  }
-
-  ctx.setState(chatId, { threadSlug: thread.slug });
-  await ctx.bot.sendMessage(
-    chatId,
-    `New thread created in "${workspace.name}". Your messages will now go here.`
-  );
+  const user = await ctx.identity(chatId);
+  const { thread } = await ChatThread.new(user);
+  ctx.setState(chatId, { threadSlug: thread.id });
+  await ctx.bot.sendMessage(chatId, "New personal conversation created.");
 }
-
 module.exports = { handleNewThread };

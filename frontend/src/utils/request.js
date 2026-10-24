@@ -1,15 +1,18 @@
-import { AUTH_TOKEN, AUTH_USER } from "./constants";
+import { savedSession, TOKEN_KEY } from "@/models/platform";
 
 // Sets up the base headers for all authenticated requests so that we are able to prevent
 // basic spoofing since a valid token is required and that cannot be spoofed
 export function userFromStorage() {
-  const userString = window.localStorage.getItem(AUTH_USER);
-  if (!userString) return null;
-  return safeJsonParse(userString, null);
+  const session = savedSession();
+  return session?.user
+    ? { ...session.user, role: session.role, identity: session.identity }
+    : null;
 }
 
 export function baseHeaders(providedToken = null) {
-  const token = providedToken || window.localStorage.getItem(AUTH_TOKEN);
+  const token =
+    providedToken ||
+    (savedSession() ? window.localStorage.getItem(TOKEN_KEY) : null);
   return {
     Authorization: token ? `Bearer ${token}` : null,
     "X-Timezone": Intl.DateTimeFormat().resolvedOptions().timeZone,

@@ -14,10 +14,11 @@ const BrowserExtensionApiKey = {
       });
   },
 
-  generateKey: async () => {
+  generateKey: async (execution = {}) => {
     return await fetch(`${API_BASE}/browser-extension/api-keys/new`, {
       method: "POST",
       headers: baseHeaders(),
+      body: JSON.stringify(execution),
     })
       .then((res) => res.json())
       .catch((e) => {

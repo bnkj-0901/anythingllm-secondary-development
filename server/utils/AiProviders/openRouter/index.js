@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { v4: uuidv4 } = require("uuid");
 const {
@@ -47,22 +51,24 @@ class OpenRouterLLM {
   defaultTimeout = 3_000;
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.OPENROUTER_API_KEY)
+    if (!env.OPENROUTER_API_KEY)
       throw new Error("No OpenRouter API key was set.");
 
     this.className = "OpenRouterLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.basePath = "https://openrouter.ai/api/v1";
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.OPENROUTER_API_KEY ?? null,
-      defaultHeaders: {
-        "HTTP-Referer": "https://anythingllm.com",
-        "X-Title": "AnythingLLM",
-      },
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.OPENROUTER_API_KEY ?? null,
+        defaultHeaders: {
+          "HTTP-Referer": "https://anythingllm.com",
+          "X-Title": "AnythingLLM",
+        },
+      })
+    );
     this.model =
-      modelPreference || process.env.OPENROUTER_MODEL_PREF || "openrouter/auto";
+      modelPreference || env.OPENROUTER_MODEL_PREF || "openrouter/auto";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -71,7 +77,7 @@ class OpenRouterLLM {
 
     this.embedder = embedder ?? new NativeEmbedder();
     this.timeout = this.#parseTimeout();
-    this.serviceTier = process.env.OPENROUTER_SERVICE_TIER;
+    this.serviceTier = env.OPENROUTER_SERVICE_TIER;
 
     if (!fs.existsSync(cacheFolder))
       fs.mkdirSync(cacheFolder, { recursive: true });
@@ -118,11 +124,10 @@ class OpenRouterLLM {
    */
   #parseTimeout() {
     this.log(
-      `OpenRouter timeout is set to ${process.env.OPENROUTER_TIMEOUT_MS ?? this.defaultTimeout}ms`
+      `OpenRouter timeout is set to ${env.OPENROUTER_TIMEOUT_MS ?? this.defaultTimeout}ms`
     );
-    if (isNaN(Number(process.env.OPENROUTER_TIMEOUT_MS)))
-      return this.defaultTimeout;
-    const setValue = Number(process.env.OPENROUTER_TIMEOUT_MS);
+    if (isNaN(Number(env.OPENROUTER_TIMEOUT_MS))) return this.defaultTimeout;
+    const setValue = Number(env.OPENROUTER_TIMEOUT_MS);
     if (setValue < 500) return 500; // 500ms is the minimum timeout
     return setValue;
   }

@@ -1,5 +1,4 @@
 import { useEffect, useState } from "react";
-import { useNavigate } from "react-router-dom";
 import Sidebar from "@/components/SettingsSidebar";
 import { isMobile } from "react-device-detect";
 import { CircleNotch } from "@phosphor-icons/react";
@@ -7,27 +6,35 @@ import Telegram from "@/models/telegram";
 import ConnectedView from "./ConnectedView";
 import SetupView from "./SetupView";
 import { useTranslation } from "react-i18next";
-import System from "@/models/system";
+import { savedSession } from "@/models/platform";
+import { TenantSelection } from "@/components/lib/ExecutionIdentity";
+import { ModalInput } from "@/components/lib/Modal";
+import CTAButton from "@/components/lib/CTAButton";
 import paths from "@/utils/paths";
 
 export default function TelegramBotSettings() {
-  const navigate = useNavigate();
+  const session = savedSession();
+  const platform = session?.identity === "platform";
+  const manager = platform || session?.role === "admin";
+  const [tenantId, setTenantId] = useState(session?.tenant?.id || "");
   const [loading, setLoading] = useState(true);
   const [config, setConfig] = useState(null);
 
   useEffect(() => {
     async function fetchData() {
-      const [isMultiUserMode, configRes] = await Promise.all([
-        System.isMultiUserMode(),
-        Telegram.getConfig(),
-      ]);
-
-      if (isMultiUserMode) navigate(paths.home());
+      Telegram.selectTenant(platform ? tenantId : "");
+      if (platform && !tenantId) {
+        setLoading(false);
+        setConfig(null);
+        return;
+      }
+      setLoading(true);
+      const configRes = await Telegram.getConfig();
       setConfig(configRes?.config || null);
       setLoading(false);
     }
     fetchData();
-  }, []);
+  }, [tenantId, platform]);
 
   const handleConnected = (newConfig) => setConfig(newConfig);
   const handleDisconnected = () => setConfig(null);
@@ -43,9 +50,22 @@ export default function TelegramBotSettings() {
   }
 
   const hasConfig = config?.active && config?.bot_username;
+  if (platform && !tenantId)
+    return (
+      <ConnectionsLayout fullPage>
+        <TenantSelection value={tenantId} onChange={setTenantId} />
+      </ConnectionsLayout>
+    );
+  if (!manager)
+    return (
+      <ConnectionsLayout fullPage>
+        <SelfPair config={config} />
+      </ConnectionsLayout>
+    );
   if (!hasConfig) {
     return (
       <ConnectionsLayout fullPage={true}>
+        <TenantSelection value={tenantId} onChange={setTenantId} />
         <SetupView onConnected={handleConnected} />
       </ConnectionsLayout>
     );
@@ -53,12 +73,102 @@ export default function TelegramBotSettings() {
 
   return (
     <ConnectionsLayout fullPage={true}>
+      <TenantSelection value={tenantId} onChange={setTenantId} />
+      {!platform && <SelfPair config={config} />}
       <ConnectedView
+        key={tenantId}
         config={config}
         onDisconnected={handleDisconnected}
         onReconnected={handleConnected}
       />
     </ConnectionsLayout>
+  );
+}
+
+function SelfPair({ config }) {
+  const [chatId, setChatId] = useState("");
+  const [code, setCode] = useState("");
+  const [message, setMessage] = useState(null);
+  const [bindings, setBindings] = useState([]);
+  const refresh = () =>
+    Telegram.getApprovedUsers().then((result) =>
+      setBindings(result.users || [])
+    );
+  useEffect(() => {
+    refresh();
+  }, []);
+  async function pair(event) {
+    event.preventDefault();
+    const result = await Telegram.approveUser(chatId, code);
+    setMessage(
+      result.success ? "已绑定到当前企业用户。" : result.error || "配对失败"
+    );
+    if (result.success) {
+      setCode("");
+      refresh();
+    }
+  }
+  if (!config?.active)
+    return (
+      <p className="text-sm text-theme-text-secondary mt-6">
+        请企业管理员先配置 Telegram Bot。
+      </p>
+    );
+  return (
+    <div className="flex flex-col gap-y-4 mt-8 max-w-[700px]">
+      <p className="text-sm text-theme-text-primary">
+        向{" "}
+        <a
+          href={`https://t.me/${config.bot_username}`}
+          target="_blank"
+          rel="noreferrer"
+          className="text-blue-400"
+        >
+          @{config.bot_username}
+        </a>{" "}
+        发送 /start，再填写私聊中收到的聊天 ID 和配对码。
+      </p>
+      <form onSubmit={pair} className="flex flex-col gap-y-4 max-w-[320px]">
+        <ModalInput
+          label="Telegram 聊天 ID"
+          value={chatId}
+          onChange={(event) => setChatId(event.target.value)}
+          required
+        />
+        <ModalInput
+          label="6 位配对码"
+          value={code}
+          onChange={(event) => setCode(event.target.value)}
+          pattern="[0-9]{6}"
+          required
+        />
+        <CTAButton type="submit">绑定本人账号</CTAButton>
+      </form>
+      {message && (
+        <p className="text-sm text-theme-text-secondary" role="status">
+          {message}
+        </p>
+      )}
+      {bindings
+        .filter((binding) => binding.userId === savedSession()?.user?.id)
+        .map((binding) => (
+          <div
+            key={binding.chatId}
+            className="flex gap-x-4 text-sm text-theme-text-primary"
+          >
+            <span>{binding.username || binding.chatId}</span>
+            <button
+              onClick={async () => {
+                await Telegram.revokeUser(binding.chatId);
+                refresh();
+              }}
+              className="text-blue-400"
+            >
+              解除绑定
+            </button>
+          </div>
+        ))}
+    </div>
   );
 }
 

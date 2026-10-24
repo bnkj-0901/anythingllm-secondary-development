@@ -40,11 +40,11 @@ const DocumentSyncQueue = {
   writable: [],
 
   bootWorkers: function () {
-    new BackgroundService().boot();
+    return new BackgroundService().syncDocumentSyncJob(true);
   },
 
   killWorkers: function () {
-    new BackgroundService().stop();
+    return new BackgroundService().syncDocumentSyncJob(false);
   },
 
   /** Check is the Document Sync/Watch feature is enabled and can be used. */
@@ -72,7 +72,11 @@ const DocumentSyncQueue = {
   canWatch: function ({ title, chunkSource = null } = {}) {
     if (!chunkSource) return false;
 
-    if (chunkSource.startsWith("link://") && title.endsWith(".html"))
+    if (
+      chunkSource.startsWith("link://") &&
+      typeof title === "string" &&
+      title.endsWith(".html")
+    )
       return true; // If is web-link material (prior to feature most chunkSources were links://)
     if (chunkSource.startsWith("youtube://")) return true; // If is a youtube link
     if (chunkSource.startsWith("confluence://")) return true; // If is a confluence document link
@@ -85,68 +89,43 @@ const DocumentSyncQueue = {
 
   /**
    * Creates Queue record and updates document watch status to true on Document record
-   * @param {import("@prisma/client").workspace_documents} document - document record to watch, must have `id`
+   * @param {import("@prisma/client").documents} document - document record to watch, must have `id`
    */
-  watch: async function (document = null) {
-    if (!document) return false;
-    try {
-      const { Document } = require("./documents");
-
-      // Get all documents that are watched and share the same unique filename. If this value is
-      // non-zero then we exit early so that we do not have duplicated watch queues for the same file
-      // across many workspaces.
-      const workspaceDocIds = (
-        await Document.where({ filename: document.filename, watched: true })
-      ).map((rec) => rec.id);
-      const hasRecords =
-        (await this.count({ workspaceDocId: { in: workspaceDocIds } })) > 0;
-      if (hasRecords)
-        throw new Error(
-          `Cannot watch this document again - it already has a queue set.`
-        );
-
-      const queue = await prisma.document_sync_queues.create({
-        data: {
-          workspaceDocId: document.id,
-          staleAfterMs: this.defaultStaleAfter,
-          nextSyncAt: new Date(Number(new Date()) + this.defaultStaleAfter),
-        },
+  watch: async function (ctx, document) {
+    if (!document) return null;
+    const { requireDocument } = require("../enterprise/knowledge");
+    const current = await requireDocument(ctx, document.id);
+    const metadata = require("../utils/http").safeJsonParse(
+      current.metadata,
+      {}
+    );
+    if (!this.canWatch(metadata))
+      throw Object.assign(new Error("此资料来源不支持自动同步"), {
+        status: 400,
       });
-      await Document._updateAll(
-        { filename: document.filename },
-        { watched: true }
-      );
-      return queue || null;
-    } catch (error) {
-      console.error(error.message);
-      return null;
-    }
+    return prisma.document_sync_queues.upsert({
+      where: { documentId: document.id },
+      create: {
+        documentId: document.id,
+        tenantId: current.tenantId,
+        userId: ctx.userId,
+        staleAfterMs: this.defaultStaleAfter,
+        nextSyncAt: this.calcNextSync({ staleAfterMs: this.defaultStaleAfter }),
+      },
+      update: {},
+    });
   },
-
-  /**
-   * Deletes Queue record and updates document watch status to false on Document record
-   * @param {import("@prisma/client").workspace_documents} document - document record to unwatch, must have `id`
-   */
-  unwatch: async function (document = null) {
-    if (!document) return false;
-    try {
-      const { Document } = require("./documents");
-
-      // We could have been given a document to unwatch which is a clone of one that is already being watched but by another workspaceDocument id.
-      // so in this instance we need to delete any queues related to this document by any WorkspaceDocumentId it is referenced by.
-      const workspaceDocIds = (
-        await Document.where({ filename: document.filename, watched: true })
-      ).map((rec) => rec.id);
-      await this.delete({ workspaceDocId: { in: workspaceDocIds } });
-      await Document._updateAll(
-        { filename: document.filename },
-        { watched: false }
-      );
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
+  unwatch: async function (ctx, document) {
+    await require("../enterprise/knowledge").requireDocument(ctx, document.id);
+    await prisma.document_sync_queues.deleteMany({
+      where: {
+        documentId: document.id,
+        ...(ctx.identity === "platform"
+          ? {}
+          : { tenantId: ctx.tenantId, userId: ctx.userId }),
+      },
+    });
+    return true;
   },
 
   _update: async function (id = null, data = {}) {
@@ -223,8 +202,7 @@ const DocumentSyncQueue = {
    * Gets the "stale" queues where the queue's nextSyncAt is less than the current time
    * @returns {Promise<(
    *  import("@prisma/client").document_sync_queues &
-   * { workspaceDoc: import("@prisma/client").workspace_documents &
-   *  { workspace: import("@prisma/client").workspaces }
+   * { document: import("@prisma/client").documents
    * })[]}>}
    */
   staleDocumentQueues: async function () {
@@ -236,13 +214,7 @@ const DocumentSyncQueue = {
       },
       null,
       null,
-      {
-        workspaceDoc: {
-          include: {
-            workspace: true,
-          },
-        },
-      }
+      { document: true }
     );
     return queues;
   },
@@ -254,18 +226,18 @@ const DocumentSyncQueue = {
 
   /**
    * Updates document to be watched/unwatched & creates or deletes any queue records and updated Document record `watched` status
-   * @param {import("@prisma/client").workspace_documents} documentRecord
+   * @param {import("@prisma/client").documents} documentRecord
    * @param {boolean} watchStatus - indicate if queue record should be created or not.
    * @returns
    */
-  toggleWatchStatus: async function (documentRecord, watchStatus = false) {
+  toggleWatchStatus: async function (ctx, documentRecord, watchStatus = false) {
     if (!watchStatus) {
       await Telemetry.sendTelemetry("document_unwatched");
-      await this.unwatch(documentRecord);
+      await this.unwatch(ctx, documentRecord);
       return;
     }
 
-    await this.watch(documentRecord);
+    await this.watch(ctx, documentRecord);
     await Telemetry.sendTelemetry("document_watched");
     return;
   },

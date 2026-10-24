@@ -1,9 +1,7 @@
-const { WorkspaceChats } = require("../../../models/workspaceChats");
 const {
   generateImageForWorkspace,
   editImageForWorkspace,
 } = require("../../ImageGenerators");
-const { writeResponseChunk } = require("../../helpers/chat/responses");
 const path = require("path");
 const fs = require("fs");
 
@@ -22,16 +20,7 @@ const fs = require("fs");
  * @param {AbortSignal|null} signal - optional external abort signal (e.g. from agent session)
  * @returns {Promise<object>} response chunk written back over the stream
  */
-async function generateImage(
-  workspace,
-  message,
-  msgUUID,
-  user = null,
-  thread = null,
-  response = null,
-  attachments = [],
-  signal = null
-) {
+async function generateImage({message, msgUUID, onEvent = null, attachments = [], signal = null, canConfigure = false}) {
   const prompt = String(message)
     .replace(/^\/img\s*/i, "")
     .trim();
@@ -52,7 +41,6 @@ async function generateImage(
   try {
     getImageGeneratorProvider();
   } catch {
-    const canConfigure = !user || user.role === "admin";
     return {
       uuid: msgUUID,
       type: "textResponse",
@@ -66,8 +54,8 @@ async function generateImage(
   }
 
   try {
-    if (response) {
-      writeResponseChunk(response, {
+    if (onEvent) {
+      await onEvent({
         uuid: msgUUID,
         type: "imageGenerationPending",
         textResponse: null,
@@ -77,14 +65,8 @@ async function generateImage(
       });
     }
 
-    const { combineAbortSignals } = require("../../helpers/abortSignals");
-    const disconnectController = new AbortController();
-    if (response && typeof response.on === "function")
-      response.on("close", () => disconnectController.abort());
-    const combinedSignal =
-      combineAbortSignals([disconnectController.signal, signal]) ??
-      disconnectController.signal;
-
+    signal?.throwIfAborted();
+    const combinedSignal = signal;
     const imageBuffers = resolveImageBuffers(attachments);
     const result =
       imageBuffers.length > 0
@@ -105,28 +87,12 @@ async function generateImage(
     let textResponse = `Generated an image for: "${prompt}"`;
     if (notice) textResponse += `\n\n_${notice}_`;
 
-    const { chat } = await WorkspaceChats.new({
-      workspaceId: workspace.id,
-      prompt: message,
-      response: {
-        text: textResponse,
-        sources: [],
-        type: "textResponse",
-        outputs,
-        attachments,
-      },
-      user,
-      threadId: thread?.id || null,
-      include: true,
-    });
-
     return {
       uuid: msgUUID,
       type: "textResponse",
       textResponse,
       sources: [],
       outputs,
-      chatId: chat?.id || null,
       close: true,
       error: false,
     };

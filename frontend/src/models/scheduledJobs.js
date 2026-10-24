@@ -2,6 +2,13 @@ import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
 
 const ScheduledJobs = {
+  managed: async function () {
+    return fetch(`${API_BASE}/scheduled-jobs/managed`, {
+      headers: baseHeaders(),
+    })
+      .then((res) => res.json())
+      .catch(() => ({ jobs: [] }));
+  },
   list: async function () {
     return await fetch(`${API_BASE}/scheduled-jobs`, {
       headers: baseHeaders(),
@@ -106,8 +113,11 @@ const ScheduledJobs = {
       }));
   },
 
-  availableTools: async function () {
-    return await fetch(`${API_BASE}/scheduled-jobs/available-tools`, {
+  availableTools: async function (execution = {}) {
+    const params = new URLSearchParams(
+      Object.entries(execution).filter(([, value]) => !!value)
+    );
+    return await fetch(`${API_BASE}/scheduled-jobs/available-tools?${params}`, {
       headers: baseHeaders(),
     })
       .then((res) => res.json())

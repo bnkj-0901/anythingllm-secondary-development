@@ -4,11 +4,13 @@ const ImportedPlugin = require("./imported");
 const MCPCompatibilityLayer = require("../MCP");
 const { AgentFlows } = require("../agentFlows");
 const { httpSocket } = require("./aibitat/plugins/http-socket.js");
-const { User } = require("../../models/user");
-const { Workspace } = require("../../models/workspace");
-const { WorkspaceChats } = require("../../models/workspaceChats");
-const { WorkspaceParsedFiles } = require("../../models/workspaceParsedFiles");
-const { DocumentManager } = require("../DocumentManager");
+const {
+  loadExecutionContext,
+  runExecution,
+} = require("../../enterprise/execution-context");
+const { Chat } = require("../../models/workspaceChats");
+const { ParsedFiles } = require("../../models/workspaceParsedFiles");
+
 const { safeJsonParse } = require("../http");
 const {
   USER_AGENT,
@@ -68,6 +70,7 @@ class EphemeralAgentHandler extends AgentHandler {
    */
   constructor({
     uuid,
+    ctx = null,
     workspace = null,
     prompt,
     userId = null,
@@ -76,7 +79,7 @@ class EphemeralAgentHandler extends AgentHandler {
     attachments = [],
     parsedDocuments = [],
   }) {
-    super({ uuid });
+    super({ uuid, ctx });
     this.#invocationUUID = uuid;
     this.#workspace = workspace;
     this.#prompt = prompt;
@@ -100,21 +103,15 @@ class EphemeralAgentHandler extends AgentHandler {
   }
 
   async #chatHistory(limit = 10) {
-    if (!this.#workspace) return [];
+    if (!this.#threadId) return [];
 
     try {
       const rawHistory = (
-        await WorkspaceChats.where(
-          {
-            workspaceId: this.#workspace.id,
-            user_id: this.#userId || null,
-            thread_id: this.#threadId || null,
-            api_session_id: this.#sessionId,
-            include: true,
-          },
+        await Chat.forThread(this.ctx, this.#threadId, {
+          include: true,
           limit,
-          { id: "desc" }
-        )
+          orderBy: { id: "desc" },
+        })
       ).reverse();
 
       const { chatHistoryAttachments } = require("../files");
@@ -243,8 +240,8 @@ class EphemeralAgentHandler extends AgentHandler {
     const user = this.#userId ? { id: this.#userId } : null;
     const effectivePrompt = prompt || this.#prompt;
     const ctx = await ModelRouterService.gatherRoutingContext({
-      workspace,
-      user,
+      ctx: this.ctx,
+      configuration: workspace,
       thread: this.#threadId ? { id: this.#threadId } : null,
       message: effectivePrompt,
       apiSessionId: this.#sessionId,
@@ -257,7 +254,11 @@ class EphemeralAgentHandler extends AgentHandler {
         conversationMessageCount: ctx.conversationMessageCount,
         attachments: this.#attachments || [],
       },
-      { user, thread: this.#threadId ? { id: this.#threadId } : null }
+      {
+        user,
+        thread: this.#threadId ? { id: this.#threadId } : null,
+        ctx: this.ctx,
+      }
     );
 
     this.provider = router.resolvedRoute.provider;
@@ -408,9 +409,7 @@ class EphemeralAgentHandler extends AgentHandler {
     // Default User agent and workspace agent
     this.log(`Attaching user and default agent to Agent cluster.`);
     this.aibitat.agent(USER_AGENT.name, USER_AGENT.getDefinition());
-    const user = this.#userId
-      ? await User.get({ id: Number(this.#userId) })
-      : null;
+    const user = this.ctx.user;
 
     this.aibitat.agent(
       WORKSPACE_AGENT.name,
@@ -418,20 +417,36 @@ class EphemeralAgentHandler extends AgentHandler {
         this.provider,
         this.#workspace,
         user,
-        this.#prompt
+        this.#prompt,
+        this.ctx
       )
     );
 
     this.#funcsToLoad = [
       ...(await agentSkillsFromSystemSettings()),
       ...ImportedPlugin.activeImportedPlugins(),
-      ...AgentFlows.activeFlowPlugins(),
-      ...(await new MCPCompatibilityLayer().activeMCPServers()),
+      ...AgentFlows.activeFlowPlugins(this.ctx),
+      ...(await new MCPCompatibilityLayer().activeMCPServers(this.ctx)),
     ];
   }
 
   async init() {
-    await this.#providerSetupAndCheck();
+    this.ctx = await loadExecutionContext(this.ctx);
+    this.#userId = this.ctx.userId;
+    this.#workspace =
+      await require("../../enterprise/rag-settings").getSettings(
+        this.ctx.tenantId
+      );
+    this.connection =
+      await require("../../enterprise/providers").resolveConnection(
+        this.ctx,
+        "chat"
+      );
+    await require("../../enterprise/ai/connection-context").runConnection(
+      this.connection,
+      {},
+      () => this.#providerSetupAndCheck()
+    );
     return this;
   }
 
@@ -444,15 +459,12 @@ class EphemeralAgentHandler extends AgentHandler {
   async #fetchParsedFileContext() {
     if (!this.#workspace) return "";
 
-    const user = this.#userId ? { id: this.#userId } : null;
-    const thread = this.#threadId ? { id: this.#threadId } : null;
-    const documentManager = new DocumentManager({
-      workspace: this.#workspace,
-    });
-
+    await loadExecutionContext(this.ctx);
     return Promise.all([
-      WorkspaceParsedFiles.getContextFiles(this.#workspace, thread, user),
-      documentManager.pinnedDocs(),
+      this.#threadId
+        ? ParsedFiles.getContextFiles(this.ctx, this.#threadId)
+        : Promise.resolve([]),
+      require("../../models/documents").Document.pinnedContext(this.ctx),
     ])
       .then(([parsedFiles, pinnedDocs]) => {
         const allDocuments = [
@@ -526,6 +538,13 @@ class EphemeralAgentHandler extends AgentHandler {
   }
 
   async createAIbitat(
+    args = { handler: null, telegramChatId: null, toolOverrides: null }
+  ) {
+    return require("../../enterprise/ai/connection-context").runConnection(this.connection, {}, () =>
+      runExecution(this.ctx, () => this.#createAIbitat(args)));
+  }
+
+  async #createAIbitat(
     args = {
       handler: null,
       telegramChatId: null,
@@ -539,9 +558,12 @@ class EphemeralAgentHandler extends AgentHandler {
       chats: await this.#chatHistory(20),
       handlerProps: {
         invocation: {
-          workspace: this.#workspace,
-          workspace_id: this.#workspace?.id ?? null,
+          tenantId: this.ctx.tenantId,
+          user_id: this.ctx.userId,
+          thread_id: this.#threadId,
         },
+        ctx: this.ctx,
+        configuration: this.#workspace,
         log: this.log,
         routingMetadata: this.routingMetadata || null,
       },
@@ -590,6 +612,8 @@ class EphemeralAgentHandler extends AgentHandler {
         telegramChatId: args.telegramChatId,
       })
     );
+    if (args.onToolApproval)
+      this.aibitat.requestToolApproval = args.onToolApproval;
 
     // Load required agents (Default + custom)
     await this.#loadAgents();
@@ -606,12 +630,19 @@ class EphemeralAgentHandler extends AgentHandler {
   }
 
   startAgentCluster() {
-    return this.aibitat.start({
-      from: USER_AGENT.name,
-      to: this.channel ?? WORKSPACE_AGENT.name,
-      content: this.#stripAgentCommand(this.#prompt),
-      attachments: this.#attachments,
-    });
+    return require("../../enterprise/ai/connection-context").runConnection(
+      this.connection,
+      {},
+      () =>
+        runExecution(this.ctx, () =>
+          this.aibitat.start({
+            from: USER_AGENT.name,
+            to: this.channel ?? WORKSPACE_AGENT.name,
+            content: this.#stripAgentCommand(this.#prompt),
+            attachments: this.#attachments,
+          })
+        )
+    );
   }
 
   /**
@@ -638,7 +669,7 @@ class EphemeralAgentHandler extends AgentHandler {
     if (this.#isAgentCommandInvocation({ message })) return true;
     if (chatMode === "automatic") {
       if (!workspace) return false;
-      if (await Workspace.supportsNativeToolCalling(workspace)) return true;
+      if (await AgentHandler.supportsNativeToolCalling(workspace)) return true;
       return false;
     }
     return false;

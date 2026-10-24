@@ -1,3 +1,9 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { v4: uuidv4 } = require("uuid");
 const {
@@ -15,27 +21,30 @@ const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
 
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "apipie")
     : path.resolve(__dirname, `../../../storage/models/apipie`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 class ApiPieLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.APIPIE_LLM_API_KEY)
+    if (!env.APIPIE_LLM_API_KEY)
       throw new Error("No ApiPie LLM API key was set.");
 
     this.className = "ApiPieLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.basePath = "https://apipie.ai/v1";
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.APIPIE_LLM_API_KEY ?? null,
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.APIPIE_LLM_API_KEY ?? null,
+      })
+    );
     this.model =
       modelPreference ||
-      process.env.APIPIE_LLM_MODEL_PREF ||
+      env.APIPIE_LLM_MODEL_PREF ||
       "openrouter/mistral-7b-instruct";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
@@ -45,10 +54,10 @@ class ApiPieLLM {
 
     this.embedder = embedder ?? new NativeEmbedder();
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
   }
 
   log(text, ...args) {
@@ -124,7 +133,7 @@ class ApiPieLLM {
   }
 
   static promptWindowLimit(modelName) {
-    const cacheModelPath = path.resolve(cacheFolder, "models.json");
+    const cacheModelPath = path.resolve(cacheFolder(), "models.json");
     const availableModels = fs.existsSync(cacheModelPath)
       ? safeJsonParse(
           fs.readFileSync(cacheModelPath, { encoding: "utf-8" }),
@@ -341,8 +350,8 @@ class ApiPieLLM {
 }
 
 async function fetchApiPieModels(providedApiKey = null) {
-  const apiKey = providedApiKey || process.env.APIPIE_LLM_API_KEY || null;
-  return await fetch(`https://apipie.ai/v1/models`, {
+  const apiKey = providedApiKey || env.APIPIE_LLM_API_KEY || null;
+  return await scopedFetch(`https://apipie.ai/v1/models`, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
@@ -363,17 +372,17 @@ async function fetchApiPieModels(providedApiKey = null) {
       });
 
       // Cache all response information
-      if (!fs.existsSync(cacheFolder))
-        fs.mkdirSync(cacheFolder, { recursive: true });
+      if (!fs.existsSync(cacheFolder()))
+        fs.mkdirSync(cacheFolder(), { recursive: true });
       fs.writeFileSync(
-        path.resolve(cacheFolder, "models.json"),
+        path.resolve(cacheFolder(), "models.json"),
         JSON.stringify(models),
         {
           encoding: "utf-8",
         }
       );
       fs.writeFileSync(
-        path.resolve(cacheFolder, ".cached_at"),
+        path.resolve(cacheFolder(), ".cached_at"),
         String(Number(new Date())),
         {
           encoding: "utf-8",

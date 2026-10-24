@@ -1,3 +1,10 @@
+const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -17,19 +24,32 @@ const {
  */
 class OMLXLLM {
   /** @see OMLXLLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.OMLX_LLM_BASE_PATH)
+    if (!env.OMLX_LLM_BASE_PATH)
       throw new Error("No OMLX API Base Path was set.");
 
     this.className = "OMLXLLM";
-    this.omlx = new OpenAIApi({
-      baseURL: parseOMLXBasePath(process.env.OMLX_LLM_BASE_PATH),
-      apiKey: process.env.OMLX_LLM_API_KEY || null,
-    });
+    this.omlx = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseOMLXBasePath(env.OMLX_LLM_BASE_PATH),
+        apiKey: env.OMLX_LLM_API_KEY || null,
+      })
+    );
 
-    this.model = modelPreference || process.env.OMLX_LLM_MODEL_PREF;
+    this.model = modelPreference || env.OMLX_LLM_MODEL_PREF;
     if (!this.model) throw new Error("OMLX must have a valid model set.");
 
     this.embedder = embedder ?? new NativeEmbedder();
@@ -75,15 +95,13 @@ class OMLXLLM {
       // Skip if we already have cached context windows and we're not forcing a refresh
       if (Object.keys(OMLXLLM.modelContextWindows).length > 0 && !force) return;
 
-      const endpoint = new URL(
-        parseOMLXBasePath(process.env.OMLX_LLM_BASE_PATH)
-      );
+      const endpoint = new URL(parseOMLXBasePath(env.OMLX_LLM_BASE_PATH));
       endpoint.pathname += "/models";
-      await fetch(endpoint.toString(), {
+      await scopedFetch(endpoint.toString(), {
         headers: {
           "Content-Type": "application/json",
-          ...(process.env.OMLX_LLM_API_KEY
-            ? { Authorization: `Bearer ${process.env.OMLX_LLM_API_KEY}` }
+          ...(env.OMLX_LLM_API_KEY
+            ? { Authorization: `Bearer ${env.OMLX_LLM_API_KEY}` }
             : {}),
         },
       })
@@ -134,18 +152,18 @@ class OMLXLLM {
       this.#slog(
         "No context windows cached - Context window may be inaccurately reported."
       );
-      return Number(process.env.OMLX_LLM_TOKEN_LIMIT) || 16000;
+      return Number(env.OMLX_LLM_TOKEN_LIMIT) || 16000;
     }
 
     let userDefinedLimit = null;
     const systemDefinedLimit = OMLXLLM.maxContextWindow(modelName);
 
     if (
-      process.env.OMLX_LLM_TOKEN_LIMIT &&
-      !isNaN(Number(process.env.OMLX_LLM_TOKEN_LIMIT)) &&
-      Number(process.env.OMLX_LLM_TOKEN_LIMIT) > 0
+      env.OMLX_LLM_TOKEN_LIMIT &&
+      !isNaN(Number(env.OMLX_LLM_TOKEN_LIMIT)) &&
+      Number(env.OMLX_LLM_TOKEN_LIMIT) > 0
     )
-      userDefinedLimit = Number(process.env.OMLX_LLM_TOKEN_LIMIT);
+      userDefinedLimit = Number(env.OMLX_LLM_TOKEN_LIMIT);
 
     // The user defined limit is always higher priority than the context window limit, but it cannot be higher than the context window limit
     // so we return the minimum of the two, if there is no user defined limit, we return the system defined limit as-is.

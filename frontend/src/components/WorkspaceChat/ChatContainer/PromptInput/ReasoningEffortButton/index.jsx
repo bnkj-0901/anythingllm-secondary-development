@@ -23,6 +23,7 @@ export default function ReasoningEffortButton({
   workspaceSlug = null,
   threadSlug = null,
   centered = false,
+  loadCapabilities = Workspace.llmCapabilities,
 }) {
   const { t } = useTranslation();
   const params = useParams();
@@ -39,15 +40,15 @@ export default function ReasoningEffortButton({
   useEffect(() => {
     if (!slug) return;
     async function load() {
-      const capabilities = await Workspace.llmCapabilities(slug);
+      const capabilities = await loadCapabilities(slug);
       setOptions(
         capabilities?.reasoning === true ? capabilities.reasoningOptions : []
       );
     }
-    load();
+    load().catch(() => setOptions([]));
     window.addEventListener(SAVE_LLM_SELECTOR_EVENT, load);
     return () => window.removeEventListener(SAVE_LLM_SELECTOR_EVENT, load);
-  }, [slug]);
+  }, [slug, loadCapabilities]);
 
   function select(value) {
     setOpen(false);

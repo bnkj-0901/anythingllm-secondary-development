@@ -46,7 +46,7 @@ function enforcePendingCap(pendingPairings) {
  */
 function isVerified(approvedUsers, chatId) {
   return (approvedUsers || []).some(
-    (u) => (typeof u === "string" ? u : u.chatId) === String(chatId)
+    (u) => u && typeof u === "object" && u.userId && u.chatId === String(chatId)
   );
 }
 
@@ -62,7 +62,11 @@ async function sendPairingRequest(bot, msg, pendingPairings) {
   const username = msg.from?.username || null;
 
   // Reuse existing code if the user already has a pending request
-  const existing = pendingPairings.get(chatId);
+  const candidate = pendingPairings.get(chatId);
+  const existing =
+    candidate && Date.now() - Date.parse(candidate.requestedAt) <= 10 * 60_000
+      ? candidate
+      : null;
   const code = existing?.code || generatePairingCode();
 
   // Enforce cap before adding new entries (not for existing users)
@@ -78,11 +82,11 @@ async function sendPairingRequest(bot, msg, pendingPairings) {
   const formattedMessage = markdownToTelegram(
     `You need to be **approved** before using this bot.
 
+Your Telegram chat ID is: <code>${chatId}</code>
 Your pairing code is: <code>${code}</code>
 
-In AnythingLLM, go to Settings → Connections → Telegram and approve your request.
-
-Make sure the pairing code shown here matches what is displayed in the settings page.
+Sign into your enterprise account, go to Settings → Connections → Telegram,
+and enter this chat ID and code to link your own account.
 
 This ensures no one else is trying to connect on your behalf.`,
     { escapeHtml: false }
@@ -98,22 +102,40 @@ This ensures no one else is trying to connect on your behalf.`,
  * @param {object} config - Current connector config (mutated in place)
  * @param {Map} pendingPairings
  */
-async function approveUser(bot, chatId, config, pendingPairings) {
-  const approved = config.approved_users || [];
-  const alreadyApproved = isVerified(approved, chatId);
-
-  if (!alreadyApproved) {
-    const pending = pendingPairings.get(Number(chatId));
-    approved.push({
-      chatId: String(chatId),
-      username: pending?.telegramUsername || null,
-      firstName: pending?.firstName || null,
-    });
-    config.approved_users = approved;
-    await ExternalCommunicationConnector.updateConfig("telegram", {
-      approved_users: approved,
-    });
-  }
+async function approveUser(bot, chatId, config, pendingPairings, userId, code) {
+  const pending = pendingPairings.get(Number(chatId));
+  if (
+    !userId ||
+    !pending ||
+    pending.code !== String(code) ||
+    Date.now() - Date.parse(pending.requestedAt) > 10 * 60_000
+  )
+    throw new Error("Invalid or expired pairing code");
+  const result = await ExternalCommunicationConnector.updateConfig(
+    "telegram",
+    (current) => {
+      const approved = current.approved_users || [];
+      const binding = approved.find((user) => user?.chatId === String(chatId));
+      if (binding && binding.userId !== userId)
+        throw new Error("Telegram account is already bound to another user");
+      return {
+        approved_users: binding
+          ? approved
+          : [
+              ...approved,
+              {
+                chatId: String(chatId),
+                userId,
+                username: pending.telegramUsername || null,
+                firstName: pending.firstName || null,
+              },
+            ],
+      };
+    },
+    config.tenantId
+  );
+  if (!result.connector) throw new Error("Telegram connection is unavailable");
+  config.approved_users = result.connector.config.approved_users;
   pendingPairings.delete(Number(chatId));
 
   if (bot) {
@@ -152,13 +174,17 @@ async function denyUser(bot, chatId, pendingPairings) {
  * @param {object} config - Current connector config (mutated in place)
  */
 async function revokeUser(chatId, config) {
-  const approved = (config.approved_users || []).filter(
-    (u) => (typeof u === "string" ? u : u.chatId) !== String(chatId)
+  const result = await ExternalCommunicationConnector.updateConfig(
+    "telegram",
+    (current) => ({
+      approved_users: (current.approved_users || []).filter(
+        (user) => String(user.chatId) !== String(chatId)
+      ),
+    }),
+    config.tenantId
   );
-  config.approved_users = approved;
-  await ExternalCommunicationConnector.updateConfig("telegram", {
-    approved_users: approved,
-  });
+  if (!result.connector) throw new Error("Telegram connection is unavailable");
+  config.approved_users = result.connector.config.approved_users;
 }
 
 module.exports = {

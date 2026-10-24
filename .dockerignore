@@ -14,5 +14,17 @@
 **/bundleinspector.html
 **/tmp/**
 **/.log
+.git/
+uniapp/
+**/coverage/
+**/server/storage/**
+!server/storage/README.md
+!server/storage/assets/
+!server/storage/assets/anything-llm.png
+!server/storage/assets/anything-llm-invert.png
+!server/storage/models/
+!server/storage/models/README.md
+!server/storage/models/downloaded/
+!server/storage/models/downloaded/.placeholder
 !docker/.env.example
 !frontend/.env.production

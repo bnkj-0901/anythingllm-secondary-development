@@ -14,12 +14,7 @@ export default function DetailsSection({ config, onDisconnected }) {
       </p>
       <div className="border border-zinc-700 light:border-slate-200 rounded-xl p-4 w-[700px]">
         <div className="flex flex-col gap-y-4 text-sm">
-          <DetailRow
-            label={t("telegram.connected.workspace")}
-            value={config.default_workspace}
-          />
-          <DetailRow label="Thread" value={config.active_thread_name} />
-          <DetailRow label="Model" value={config.chat_model} />
+          <DetailRow label="会话归属" value="每位员工自己的个人会话" />
           <DetailRow
             label={t("telegram.connected.bot-link")}
             value={

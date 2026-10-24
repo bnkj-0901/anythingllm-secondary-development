@@ -1,6 +1,5 @@
-const { Workspace } = require("../../../../../models/workspace");
-const { WorkspaceThread } = require("../../../../../models/workspaceThread");
-const { WorkspaceChats } = require("../../../../../models/workspaceChats");
+const { ChatThread } = require("../../../../../models/workspaceThread");
+const { Chat } = require("../../../../../models/workspaceChats");
 const { convertToChatHistory } = require("../../../../helpers/chat/responses");
 const { sendBatchedMessages } = require("../../../utils");
 const { escapeHTML } = require("../../format");
@@ -16,32 +15,22 @@ const MAX_HISTORY_COUNT = 50;
  */
 async function handleHistory(ctx, chatId, messageText = "") {
   const state = ctx.getState(chatId);
-  const workspace = await Workspace.get({ slug: state.workspaceSlug });
-  if (!workspace) {
-    await ctx.bot.sendMessage(chatId, "No workspace configured.");
-    return;
-  }
-
+  const identity = await ctx.identity(chatId);
   const match = messageText.match(/\/history\s+(\d+)/);
   const count = match
     ? Math.min(parseInt(match[1], 10), MAX_HISTORY_COUNT)
     : DEFAULT_HISTORY_COUNT;
 
   const thread = state.threadSlug
-    ? await WorkspaceThread.get({ slug: state.threadSlug })
+    ? await ChatThread.get(identity, { id: state.threadSlug })
     : null;
-
-  const rawChats = await WorkspaceChats.where(
-    {
-      workspaceId: workspace.id,
-      user_id: null,
-      thread_id: thread?.id || null,
-      api_session_id: null,
-      include: true,
-    },
-    count,
-    { id: "desc" }
-  );
+  const rawChats = thread
+    ? await Chat.forThread(identity, thread.id, {
+        limit: count,
+        orderBy: { id: "desc" },
+        include: true,
+      })
+    : [];
 
   if (!rawChats.length) {
     await ctx.bot.sendMessage(chatId, "No messages yet in this thread.");
@@ -68,7 +57,7 @@ async function handleHistory(ctx, chatId, messageText = "") {
   if (!exchanges.length) return;
 
   const threadName = thread?.name || "Default";
-  const header = `<b>${workspace.name} → ${threadName}</b>\nLast ${exchanges.length} message(s)\n\n`;
+  const header = `<b>${threadName}</b>\nLast ${exchanges.length} message(s)\n\n`;
 
   await sendBatchedMessages(ctx.bot, chatId, exchanges, {
     header,

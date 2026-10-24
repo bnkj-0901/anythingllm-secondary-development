@@ -4,7 +4,7 @@ const ROLES = {
   all: "<all>",
   admin: "admin",
   manager: "manager",
-  default: "default",
+  default: "user",
 };
 const DEFAULT_ROLES = [ROLES.admin, ROLES.admin];
 
@@ -41,7 +41,7 @@ function strictMultiUserRoleValid(allowedRoles = DEFAULT_ROLES) {
 
     const user =
       response.locals?.user ?? (await userFromSession(request, response));
-    if (allowedRoles.includes(user?.role)) {
+    if (user?.identity === "platform" || allowedRoles.includes(user?.role)) {
       next();
       return;
     }
@@ -75,7 +75,7 @@ function flexUserRoleValid(allowedRoles = DEFAULT_ROLES) {
 
     const user =
       response.locals?.user ?? (await userFromSession(request, response));
-    if (allowedRoles.includes(user?.role)) {
+    if (user?.identity === "platform" || allowedRoles.includes(user?.role)) {
       next();
       return;
     }

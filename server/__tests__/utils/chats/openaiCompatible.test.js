@@ -1,253 +1,128 @@
-/* eslint-env jest, node */
-const { OpenAICompatibleChat } = require('../../../utils/chats/openaiCompatible');
-const { WorkspaceChats } = require('../../../models/workspaceChats');
-const { getVectorDbClass, getLLMProvider, resolveProviderConnector } = require('../../../utils/helpers');
-const { extractTextContent, extractAttachments } = require('../../../endpoints/api/openai/helpers');
+const { EventEmitter } = require("events");
+jest.mock("../../../enterprise/rag", () => ({ executeChat: jest.fn() }));
+const { executeChat } = require("../../../enterprise/rag");
+const {
+  OpenAICompatibleChat,
+} = require("../../../utils/chats/openaiCompatible");
+const {
+  extractTextContent,
+  extractAttachments,
+} = require("../../../endpoints/api/openai/helpers");
+const ctx = { identity: "tenant", tenantId: "company-a", userId: "alice" };
+const history = [
+  { role: "user", content: "Previous question" },
+  { role: "assistant", content: "Previous answer" },
+];
+const multimodal = [
+  { type: "text", text: "Describe this image" },
+  {
+    type: "image_url",
+    image_url: { url: "data:image/png;base64,aGVsbG8=", detail: "low" },
+  },
+];
+beforeEach(() => jest.clearAllMocks());
 
-// Mock dependencies
-jest.mock('../../../models/workspaceChats');
-jest.mock('../../../utils/helpers');
-jest.mock('../../../utils/DocumentManager', () => ({
-  DocumentManager: class {
-    constructor() {
-      this.pinnedDocs = jest.fn().mockResolvedValue([]);
-    }
+test("query refusal delivered only by the final event is not lost in OpenAI streaming", async () => {
+  executeChat.mockImplementation(async ({ onEvent }) => {
+    await onEvent({ type: "finalizeResponseStream", textResponse: "No relevant information.", close: true, metrics: {} });
+  });
+  const response = Object.assign(new EventEmitter(), { write: jest.fn() });
+  await OpenAICompatibleChat.streamChat({ ctx, prompt: "unknown", response });
+  const chunks = response.write.mock.calls.map(([frame]) => frame.trim().slice(6)).filter((frame) => frame !== "[DONE]").map(JSON.parse);
+  expect(chunks.map((chunk) => chunk.choices[0].delta.content).join("")).toBe("No relevant information.");
+  expect(response.write.mock.calls.filter(([frame]) => frame === "data: [DONE]\n\n")).toHaveLength(1);
+});
+test.each(["Hello", multimodal])(
+  "OpenAI sync retains protocol and forwards personal execution identity and multimodal input",
+  async (content) => {
+    executeChat.mockResolvedValue({
+      textResponse: "Answer",
+      metrics: { prompt_tokens: 8, completion_tokens: 2 },
+    });
+    const result = await OpenAICompatibleChat.chatSync({
+      ctx,
+      prompt: extractTextContent(content),
+      attachments: extractAttachments(content),
+      history,
+      systemPrompt: "System",
+      temperature: 0.7,
+    });
+    expect(executeChat).toHaveBeenCalledWith(
+      expect.objectContaining({
+        ctx,
+        prompt: extractTextContent(content),
+        attachments: extractAttachments(content),
+        history,
+        systemPrompt: "System",
+        temperature: 0.7,
+        persist: false,
+      })
+    );
+    expect(result).toMatchObject({
+      object: "chat.completion",
+      model: "default",
+      choices: [
+        {
+          message: { role: "assistant", content: "Answer" },
+          finish_reason: "stop",
+        },
+      ],
+      usage: { prompt_tokens: 8, completion_tokens: 2 },
+    });
   }
-}));
-
-describe('OpenAICompatibleChat', () => {
-  let mockWorkspace;
-  let mockVectorDb;
-  let mockLLMConnector;
-  let mockResponse;
-
-  beforeEach(() => {
-    // Reset all mocks
-    jest.clearAllMocks();
-
-    // Setup mock workspace
-    mockWorkspace = {
-      id: 1,
-      slug: 'test-workspace',
-      chatMode: 'chat',
-      chatProvider: 'openai',
-      chatModel: 'gpt-4',
-    };
-
-    // Setup mock VectorDb
-    mockVectorDb = {
-      hasNamespace: jest.fn().mockResolvedValue(true),
-      namespaceCount: jest.fn().mockResolvedValue(1),
-      performSimilaritySearch: jest.fn().mockResolvedValue({
-        contextTexts: [],
-        sources: [],
-        message: null,
-      }),
-    };
-    getVectorDbClass.mockReturnValue(mockVectorDb);
-
-    // Setup mock LLM connector
-    mockLLMConnector = {
-      promptWindowLimit: jest.fn().mockReturnValue(4000),
-      compressMessages: jest.fn().mockResolvedValue([]),
-      getChatCompletion: jest.fn().mockResolvedValue({
-        textResponse: 'Mock response',
-        metrics: {},
-      }),
-      streamingEnabled: jest.fn().mockReturnValue(true),
-      streamGetChatCompletion: jest.fn().mockResolvedValue({
-        metrics: {},
-      }),
-      handleStream: jest.fn().mockResolvedValue('Mock streamed response'),
-    };
-    getLLMProvider.mockReturnValue(mockLLMConnector);
-    resolveProviderConnector.mockResolvedValue({
-      connector: mockLLMConnector,
-      routingMetadata: null,
-      prefetchedContext: null,
-    });
-
-    // Setup WorkspaceChats mock
-    WorkspaceChats.new.mockResolvedValue({ chat: { id: 'mock-chat-id' } });
-
-    // Setup mock response object for streaming
-    mockResponse = {
-      write: jest.fn(),
-    };
-  });
-
-  describe('chatSync', () => {
-    test('should handle OpenAI vision multimodal messages', async () => {
-      const multiModalPrompt = [
-        {
-          type: 'text',
-          text: 'What do you see in this image?'
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: 'data:image/png;base64,abc123',
-            detail: 'low'
-          }
-        }
-      ];
-
-      const prompt = extractTextContent(multiModalPrompt);
-      const attachments = extractAttachments(multiModalPrompt);
-      const result = await OpenAICompatibleChat.chatSync({
-        workspace: mockWorkspace,
-        prompt,
-        attachments,
-        systemPrompt: 'You are a helpful assistant',
-        history: [
-          { role: 'user', content: 'Previous message' },
-          { role: 'assistant', content: 'Previous response' }
-        ],
-        temperature: 0.7
-      });
-
-      // Verify chat was saved with correct format
-      expect(WorkspaceChats.new).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: mockWorkspace.id,
-          prompt: multiModalPrompt[0].text,
-          response: expect.objectContaining({
-            text: 'Mock response',
-            attachments: [{
-              name: 'uploaded_image_0',
-              mime: 'image/png',
-              contentString: multiModalPrompt[1].image_url.url
-            }]
-          })
-        })
-      );
-
-      // Verify response format
-      expect(result).toEqual(
-        expect.objectContaining({
-          object: 'chat.completion',
-          choices: expect.arrayContaining([
-            expect.objectContaining({
-              message: expect.objectContaining({
-                role: 'assistant',
-                content: 'Mock response',
-              }),
-            }),
-          ]),
-        })
-      );
-    });
-
-    test('should handle regular text messages in OpenAI format', async () => {
-      const promptString = 'Hello world';
-      const result = await OpenAICompatibleChat.chatSync({
-        workspace: mockWorkspace,
-        prompt: promptString,
-        systemPrompt: 'You are a helpful assistant',
-        history: [
-          { role: 'user', content: 'Previous message' },
-          { role: 'assistant', content: 'Previous response' }
-        ],
-        temperature: 0.7
-      });
-
-      // Verify chat was saved without attachments
-      expect(WorkspaceChats.new).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: mockWorkspace.id,
-          prompt: promptString,
-          response: expect.objectContaining({
-            text: 'Mock response',
-            attachments: []
-          })
-        })
-      );
-
-      expect(result).toBeTruthy();
+);
+test("streaming translates the shared personal SSE into OpenAI chunks and one DONE marker", async () => {
+  executeChat.mockImplementation(async ({ onEvent }) => {
+    await onEvent({ type: "textResponseChunk", textResponse: "First " });
+    await onEvent({ type: "textResponseChunk", textResponse: "second" });
+    await onEvent({
+      type: "finalizeResponseStream",
+      metrics: { completion_tokens: 2 },
     });
   });
-
-  describe('streamChat', () => {
-    test('should handle OpenAI vision multimodal messages in streaming mode', async () => {
-      const multiModalPrompt = [
-        {
-          type: 'text',
-          text: 'What do you see in this image?'
-        },
-        {
-          type: 'image_url',
-          image_url: {
-            url: 'data:image/png;base64,abc123',
-            detail: 'low'
-          }
-        }
-      ];
-
-      const prompt = extractTextContent(multiModalPrompt);
-      const attachments = extractAttachments(multiModalPrompt);
-      await OpenAICompatibleChat.streamChat({
-        workspace: mockWorkspace,
-        response: mockResponse,
-        prompt,
-        attachments,
-        systemPrompt: 'You are a helpful assistant',
-        history: [
-          { role: 'user', content: 'Previous message' },
-          { role: 'assistant', content: 'Previous response' }
-        ],
-        temperature: 0.7
-      });
-
-      // Verify streaming was handled
-      expect(mockLLMConnector.streamGetChatCompletion).toHaveBeenCalled();
-      expect(mockLLMConnector.handleStream).toHaveBeenCalled();
-
-      // Verify chat was saved with attachments
-      expect(WorkspaceChats.new).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: mockWorkspace.id,
-          prompt: multiModalPrompt[0].text,
-          response: expect.objectContaining({
-            text: 'Mock streamed response',
-            attachments: [{
-              name: 'uploaded_image_0',
-              mime: 'image/png',
-              contentString: multiModalPrompt[1].image_url.url
-            }]
-          })
-        })
-      );
-    });
-
-    test('should handle regular text messages in streaming mode', async () => {
-      const promptString = 'Hello world';
-      await OpenAICompatibleChat.streamChat({
-        workspace: mockWorkspace,
-        response: mockResponse,
-        prompt: promptString,
-        systemPrompt: 'You are a helpful assistant',
-        history: [
-          { role: 'user', content: 'Previous message' },
-          { role: 'assistant', content: 'Previous response' }
-        ],
-        temperature: 0.7
-      });
-
-      // Verify streaming was handled
-      expect(mockLLMConnector.streamGetChatCompletion).toHaveBeenCalled();
-      expect(mockLLMConnector.handleStream).toHaveBeenCalled();
-
-      // Verify chat was saved without attachments
-      expect(WorkspaceChats.new).toHaveBeenCalledWith(
-        expect.objectContaining({
-          workspaceId: mockWorkspace.id,
-          prompt: promptString,
-          response: expect.objectContaining({
-            text: 'Mock streamed response',
-            attachments: []
-          })
-        })
-      );
-    });
+  const response = new EventEmitter();
+  response.write = jest.fn();
+  await OpenAICompatibleChat.streamChat({
+    ctx,
+    prompt: extractTextContent(multimodal),
+    attachments: extractAttachments(multimodal),
+    history,
+    response,
   });
+  const frames = response.write.mock.calls.map(([chunk]) =>
+    chunk.trim().slice(6)
+  );
+  expect(frames.at(-1)).toBe("[DONE]");
+  const chunks = frames.slice(0, -1).map(JSON.parse);
+  expect(chunks.map((chunk) => chunk.choices[0].delta.content)).toEqual([
+    "First ",
+    "second",
+    "",
+  ]);
+  expect(chunks.at(-1)).toMatchObject({
+    choices: [{ finish_reason: "stop" }],
+    usage: { completion_tokens: 2 },
+  });
+  expect(new Set(chunks.map((chunk) => chunk.id)).size).toBe(1);
+  expect(executeChat).toHaveBeenCalledWith(
+    expect.objectContaining({
+      ctx,
+      persist: false,
+      attachments: extractAttachments(multimodal),
+    })
+  );
+  expect(response.listenerCount("close")).toBe(0);
+});
+test("disconnect aborts the shared provider request and leaves no close listener", async () => {
+  const response = new EventEmitter();
+  response.write = jest.fn();
+  executeChat.mockImplementation(async ({ signal }) => {
+    response.emit("close");
+    signal.throwIfAborted();
+  });
+  await expect(
+    OpenAICompatibleChat.streamChat({ ctx, prompt: "Question", response })
+  ).rejects.toMatchObject({ name: "AbortError" });
+  expect(response.write).not.toHaveBeenCalled();
+  expect(response.listenerCount("close")).toBe(0);
 });

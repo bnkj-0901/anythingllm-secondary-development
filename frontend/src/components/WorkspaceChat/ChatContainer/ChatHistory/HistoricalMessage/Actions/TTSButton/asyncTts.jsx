@@ -4,7 +4,11 @@ import Workspace from "@/models/workspace";
 import showToast from "@/utils/toast";
 import { useTranslation } from "react-i18next";
 
-export default function AsyncTTSMessage({ slug, chatId }) {
+export default function AsyncTTSMessage({
+  slug,
+  chatId,
+  fetchAudio = Workspace.ttsMessage,
+}) {
   const playerRef = useRef(null);
   const [speaking, setSpeaking] = useState(false);
   const [loading, setLoading] = useState(false);
@@ -20,7 +24,7 @@ export default function AsyncTTSMessage({ slug, chatId }) {
     try {
       if (!audioSrc) {
         setLoading(true);
-        Workspace.ttsMessage(slug, chatId)
+        fetchAudio(slug, chatId)
           .then((audioBlob) => {
             if (!audioBlob)
               throw new Error("Failed to load or play TTS message response.");
@@ -37,6 +41,12 @@ export default function AsyncTTSMessage({ slug, chatId }) {
       setSpeaking(false);
     }
   }
+
+  useEffect(() => {
+    return () => {
+      if (audioSrc) URL.revokeObjectURL(audioSrc);
+    };
+  }, [audioSrc]);
 
   useEffect(() => {
     function setupPlayer() {

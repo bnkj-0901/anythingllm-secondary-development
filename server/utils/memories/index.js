@@ -7,7 +7,7 @@
  * Exports `promptWithMemories(opts)`. Given a base system prompt, it looks up
  * the user's global + workspace memories, reranks the workspace set against
  * the current prompt + recent history (only when there are more than
- * Memory.MAX_INJECTED_WORKSPACE_LIMIT to choose from), formats the selected memories as
+ * Memory.MAX_INJECTED_LIMIT to choose from), formats the selected memories as
  * a markdown section, and appends it to the system prompt. Returns the
  * original prompt unchanged when memories are disabled or the user has none.
  */
@@ -23,34 +23,22 @@ const { SystemSettings } = require("../../models/systemSettings");
  * @param {object[]} rawHistory - Recent chat history objects with .prompt field
  * @returns {Promise<string>} Formatted memory section or empty string
  */
-async function getMemoriesForPrompt(userId, workspaceId, prompt, rawHistory) {
+async function getMemoriesForPrompt(ctx, prompt, rawHistory) {
   try {
-    const enabled = await SystemSettings.memoriesEnabled();
-    if (!enabled) return "";
-
-    const [globalMemories, workspaceMemories] = await Promise.all([
-      Memory.globalForUser(userId ?? null),
-      Memory.forUserWorkspace(userId ?? null, workspaceId),
-    ]);
-
-    if (globalMemories.length === 0 && workspaceMemories.length === 0)
-      return "";
-
-    let selectedWorkspace = workspaceMemories;
-    if (workspaceMemories.length > Memory.MAX_INJECTED_WORKSPACE_LIMIT) {
-      const hasContext = prompt?.trim() || rawHistory?.length > 0;
-      selectedWorkspace = hasContext
-        ? await rerankMemories(workspaceMemories, prompt, rawHistory)
-        : workspaceMemories.slice(0, Memory.MAX_INJECTED_WORKSPACE_LIMIT);
-    }
-
-    const injectedIds = [
-      ...globalMemories.map((m) => m.id),
-      ...selectedWorkspace.map((m) => m.id),
-    ];
-    Memory.updateLastUsed(injectedIds);
-
-    return formatMemories(globalMemories, selectedWorkspace);
+    if (!(await SystemSettings.memoriesEnabled())) return "";
+    const memories = await Memory.forUser(ctx);
+    if (!memories.length) return "";
+    const selected =
+      memories.length > Memory.MAX_INJECTED_LIMIT
+        ? prompt?.trim() || rawHistory?.length
+          ? await rerankMemories(memories, prompt, rawHistory)
+          : memories.slice(0, Memory.MAX_INJECTED_LIMIT)
+        : memories;
+    await Memory.updateLastUsed(
+      ctx,
+      selected.map((memory) => memory.id)
+    );
+    return formatMemories([], selected);
   } catch (error) {
     console.error("[Memory Injection] Error:", error.message);
     return "";
@@ -81,7 +69,7 @@ async function rerankMemories(memories, prompt, rawHistory) {
     const documents = memories.map((m) => ({ text: m.content }));
 
     const reranked = await reranker.rerank(query, documents, {
-      topK: Memory.MAX_INJECTED_WORKSPACE_LIMIT,
+      topK: Memory.MAX_INJECTED_LIMIT,
     });
 
     return reranked.map((r) => memories[r.rerank_corpus_id]);
@@ -90,7 +78,7 @@ async function rerankMemories(memories, prompt, rawHistory) {
       "[Memory Injection] Reranker failed, falling back to recent:",
       error.message
     );
-    return memories.slice(0, Memory.MAX_INJECTED_WORKSPACE_LIMIT);
+    return memories.slice(0, Memory.MAX_INJECTED_LIMIT);
   }
 }
 
@@ -120,17 +108,11 @@ function formatMemories(globalMemories, workspaceMemories) {
  */
 async function promptWithMemories({
   systemPrompt,
-  userId,
-  workspaceId,
+  ctx,
   prompt = "",
   rawHistory = [],
 }) {
-  const memoriesContext = await getMemoriesForPrompt(
-    userId,
-    workspaceId,
-    prompt,
-    rawHistory
-  );
+  const memoriesContext = await getMemoriesForPrompt(ctx, prompt, rawHistory);
   return memoriesContext
     ? `${systemPrompt}\n\n${memoriesContext}`
     : systemPrompt;

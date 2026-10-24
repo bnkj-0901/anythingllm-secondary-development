@@ -2,6 +2,10 @@ const { ScheduledJob } = require("../../../../../models/scheduledJob");
 const { BackgroundService } = require("../../../../BackgroundWorkers");
 const { UserMetaCache } = require("../../../../userLocale");
 const {
+  executionContext,
+} = require("../../../../../enterprise/execution-context");
+const { refreshContext } = require("../../../../../enterprise/auth");
+const {
   convertCronLocalToUtc,
   catalogIdSet,
   readyToolsCatalog,
@@ -95,6 +99,9 @@ const createScheduledJob = {
           },
 
           execute: async function (args) {
+            const identity = await refreshContext(executionContext());
+            if (identity.identity === "platform")
+              return "请选择企业执行用户后创建定时任务。";
             // Only offer tools that are configured and ready to use - a job
             // can't use a tool that still needs setup (e.g. Gmail without
             // credentials), exactly like the manual Scheduled Jobs UI.
@@ -122,7 +129,7 @@ const createScheduledJob = {
             // Convert the model's local-time cron to UTC using the user's
             // timezone from the per-request locale cache (populated by the
             // X-Timezone header on every authenticated request).
-            const userId = this.super.handlerProps.invocation?.user_id ?? null;
+            const userId = identity.userId;
             const { timezone } = UserMetaCache.get(userId);
             const cron = convertCronLocalToUtc(localCron, timezone);
             if (!cron) {
@@ -170,7 +177,10 @@ const createScheduledJob = {
               }
             }
 
+            await refreshContext(identity);
             const { job, error } = await ScheduledJob.create({
+              tenantId: identity.tenantId,
+              userId: identity.userId,
               name: args.name.trim(),
               prompt: args.prompt.trim(),
               tools,

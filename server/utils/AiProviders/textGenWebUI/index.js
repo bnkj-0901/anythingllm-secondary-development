@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -13,17 +17,19 @@ const {
 class TextGenWebUILLM {
   constructor(embedder = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.TEXT_GEN_WEB_UI_BASE_PATH)
+    if (!env.TEXT_GEN_WEB_UI_BASE_PATH)
       throw new Error(
         "TextGenWebUI must have a valid base path to use for the api."
       );
 
     this.className = "TextGenWebUILLM";
-    this.basePath = process.env.TEXT_GEN_WEB_UI_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.TEXT_GEN_WEB_UI_API_KEY ?? null,
-    });
+    this.basePath = env.TEXT_GEN_WEB_UI_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.TEXT_GEN_WEB_UI_API_KEY ?? null,
+      })
+    );
     this.model = null;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
@@ -56,7 +62,7 @@ class TextGenWebUILLM {
   }
 
   static promptWindowLimit(_modelName) {
-    const limit = process.env.TEXT_GEN_WEB_UI_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.TEXT_GEN_WEB_UI_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);
@@ -65,7 +71,7 @@ class TextGenWebUILLM {
   // Ensure the user set a value for the token limit
   // and if undefined - assume 4096 window.
   promptWindowLimit() {
-    const limit = process.env.TEXT_GEN_WEB_UI_MODEL_TOKEN_LIMIT || 4096;
+    const limit = env.TEXT_GEN_WEB_UI_MODEL_TOKEN_LIMIT || 4096;
     if (!limit || isNaN(Number(limit)))
       throw new Error("No token context limit was set.");
     return Number(limit);

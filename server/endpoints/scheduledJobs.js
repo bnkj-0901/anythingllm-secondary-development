@@ -1,7 +1,38 @@
 const { ScheduledJob } = require("../models/scheduledJob");
 const { ScheduledJobRun } = require("../models/scheduledJobRun");
-const { validatedRequest } = require("../utils/middleware/validatedRequest");
-const { isSingleUserMode } = require("../utils/middleware/multiUserProtected");
+const {
+  authenticate: validatedRequest,
+  wrap,
+  owned,
+} = require("../utils/middleware/externalIdentity");
+const { fail } = require("../enterprise/auth");
+const taskScope = wrap(async (req, res, next) => {
+  if (req.ep.identity === "platform") return next();
+  let job;
+  if (req.params.runId) {
+    const run = await ScheduledJobRun.get(
+      { id: Number(req.params.runId) },
+      { job: true }
+    );
+    job = run?.job;
+  } else if (req.params.id)
+    job = await ScheduledJob.get({ id: Number(req.params.id) });
+  if (!req.params.id && !req.params.runId) return next();
+  if (!job || job.tenantId !== req.ep.tenantId)
+    throw fail(404, "Task not found");
+  if (owned(req.ep, job)) return next();
+  const stopping =
+    req.params.action === "kill" ||
+    (req.method === "PUT" &&
+      Object.keys(req.body || {}).length === 1 &&
+      req.body.enabled === false) ||
+    (req.path.endsWith("/toggle") && job.enabled);
+  if (req.ep.role === "admin" && stopping) {
+    req.manageStopOnly = true;
+    return next();
+  }
+  throw fail(404, "Task not found");
+});
 const { reqBody, safeJsonParse } = require("../utils/http");
 const { BackgroundService } = require("../utils/BackgroundWorkers");
 const { Telemetry } = require("../models/telemetry");
@@ -14,13 +45,53 @@ const backgroundService = new BackgroundService();
 function scheduledJobEndpoints(app) {
   if (!app) return;
 
+  app.get(
+    "/scheduled-jobs/managed",
+    [validatedRequest],
+    async (req, res, next) => {
+      try {
+        if (req.ep.identity !== "platform" && req.ep.role !== "admin")
+          throw fail(403, "需要管理员权限");
+        const jobs = await ScheduledJob.where(
+          req.ep.identity === "platform" ? {} : { tenantId: req.ep.tenantId }
+        );
+        res.json({
+          jobs: jobs.map(
+            ({ id, tenantId, userId, name, enabled, schedule }) => ({
+              id,
+              tenantId,
+              userId,
+              name,
+              enabled,
+              schedule,
+            })
+          ),
+        });
+      } catch (error) {
+        next(error);
+      }
+    }
+  );
+
   // List available tools for job configuration
   app.get(
     "/scheduled-jobs/available-tools",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
+    [validatedRequest, taskScope],
+    async (request, response) => {
       try {
-        const tools = await ScheduledJob.availableTools();
+        let identity = request.ep;
+        if (identity.identity === "platform" && request.query.userId) {
+          identity = await require("../enterprise/auth").context(
+            request.query.userId
+          );
+          if (identity.tenantId !== request.query.tenantId)
+            throw fail(400, "执行用户不属于目标企业");
+        }
+        const tools =
+          await require("../enterprise/execution-context").runExecution(
+            identity,
+            () => ScheduledJob.availableTools()
+          );
         return response.status(200).json({ tools });
       } catch (e) {
         console.error(e.message, e);
@@ -32,7 +103,7 @@ function scheduledJobEndpoints(app) {
   // Get a single run detail
   app.get(
     "/scheduled-jobs/runs/:runId",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const run = await ScheduledJobRun.get({
@@ -62,7 +133,7 @@ function scheduledJobEndpoints(app) {
   // Mark a run as read or continue in thread, or kill a running or queued job run
   app.post(
     "/scheduled-jobs/runs/:runId/:action",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const { action } = request.params;
@@ -76,14 +147,13 @@ function scheduledJobEndpoints(app) {
         }
 
         if (action === "continue") {
-          const { workspace, thread, error } =
-            await ScheduledJobRun.continueInThread(
-              Number(request.params.runId)
-            );
+          const { thread, error } = await ScheduledJobRun.continueInThread(
+            Number(request.params.runId)
+          );
           if (error) return response.status(500).json({ error });
 
           return response.status(200).json({
-            workspaceSlug: workspace.slug,
+            conversationId: thread.id,
             threadSlug: thread.slug,
           });
         }
@@ -114,15 +184,22 @@ function scheduledJobEndpoints(app) {
   // List all scheduled jobs
   app.get(
     "/scheduled-jobs",
-    [validatedRequest, isSingleUserMode],
-    async (_request, response) => {
+    [validatedRequest, taskScope],
+    async (request, response) => {
       try {
-        const jobs = await ScheduledJob.where({}, null, null, {
-          runs: {
-            take: 1,
-            orderBy: { startedAt: "desc" },
-          },
-        });
+        const jobs = await ScheduledJob.where(
+          request.ep.identity === "platform"
+            ? {}
+            : { tenantId: request.ep.tenantId, userId: request.ep.userId },
+          null,
+          null,
+          {
+            runs: {
+              take: 1,
+              orderBy: { startedAt: "desc" },
+            },
+          }
+        );
 
         const jobsWithStatus = jobs.map(({ runs, ...job }) => ({
           ...job,
@@ -140,10 +217,20 @@ function scheduledJobEndpoints(app) {
   // Create a new scheduled job
   app.post(
     "/scheduled-jobs/new",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const { name, prompt, tools, schedule } = reqBody(request);
+        let execution = request.ep;
+        if (request.ep.identity === "platform") {
+          execution = await require("../enterprise/auth").context(
+            request.body.userId
+          );
+          if (execution.tenantId !== request.body.tenantId)
+            return response
+              .status(400)
+              .json({ error: "请选择该企业的有效执行用户" });
+        }
         let errorMessage = null;
 
         if (!name?.trim()) {
@@ -178,6 +265,8 @@ function scheduledJobEndpoints(app) {
           prompt: prompt.trim(),
           tools: tools || null,
           schedule: schedule.trim(),
+          tenantId: execution.tenantId,
+          userId: execution.userId,
         });
 
         if (error) {
@@ -197,7 +286,7 @@ function scheduledJobEndpoints(app) {
   // Get a single scheduled job
   app.get(
     "/scheduled-jobs/:id",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const job = await ScheduledJob.get({
@@ -219,7 +308,7 @@ function scheduledJobEndpoints(app) {
   // Update a scheduled job
   app.put(
     "/scheduled-jobs/:id",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const { name, prompt, tools, schedule, enabled } = reqBody(request);
@@ -264,7 +353,11 @@ function scheduledJobEndpoints(app) {
 
         await backgroundService.syncScheduledJob(job.id);
 
-        return response.status(200).json({ job, error: null });
+        return response
+          .status(200)
+          .json(
+            request.manageStopOnly ? { success: true } : { job, error: null }
+          );
       } catch (e) {
         console.error(e.message, e);
         response.sendStatus(500);
@@ -275,7 +368,7 @@ function scheduledJobEndpoints(app) {
   // Delete a scheduled job
   app.delete(
     "/scheduled-jobs/:id",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         backgroundService.removeScheduledJob(Number(request.params.id));
@@ -292,7 +385,7 @@ function scheduledJobEndpoints(app) {
   // Toggle enable/disable
   app.post(
     "/scheduled-jobs/:id/toggle",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const job = await ScheduledJob.get({
@@ -317,12 +410,14 @@ function scheduledJobEndpoints(app) {
         }
 
         const { job: updated } = await ScheduledJob.update(job.id, {
-          enabled: !job.enabled,
+          enabled: request.manageStopOnly ? false : !job.enabled,
         });
 
         await backgroundService.syncScheduledJob(job.id);
 
-        return response.status(200).json({ job: updated });
+        return response
+          .status(200)
+          .json(request.manageStopOnly ? { success: true } : { job: updated });
       } catch (e) {
         console.error(e.message, e);
         response.sendStatus(500);
@@ -333,7 +428,7 @@ function scheduledJobEndpoints(app) {
   // Manual trigger — runs the job immediately
   app.post(
     "/scheduled-jobs/:id/trigger",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const job = await ScheduledJob.get({
@@ -357,7 +452,7 @@ function scheduledJobEndpoints(app) {
   // List runs for a job
   app.get(
     "/scheduled-jobs/:id/runs",
-    [validatedRequest, isSingleUserMode],
+    [validatedRequest, taskScope],
     async (request, response) => {
       try {
         const runs = await ScheduledJobRun.where(

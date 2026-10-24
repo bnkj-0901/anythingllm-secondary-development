@@ -5,18 +5,22 @@ const {
 } = require("../../utils/middleware/multiUserProtected");
 const { reqBody } = require("../../utils/http");
 const FoundryModels = require("../../utils/AiProviders/foundry/models");
+const { env } = require("../../enterprise/ai/connection-context");
 
-function foundryUtilsEndpoints(app) {
+function foundryUtilsEndpoints(
+  app,
+  middleware = [validatedRequest, flexUserRoleValid([ROLES.admin])]
+) {
   if (!app) return;
 
   app.post(
     "/utils/foundry/capabilities",
-    [validatedRequest, flexUserRoleValid([ROLES.admin])],
+    middleware,
     async (request, response) => {
       try {
         const { basePath = null } = reqBody(request);
         const capabilities = await FoundryModels.resolveSource(
-          basePath || process.env.FOUNDRY_BASE_PATH
+          basePath || env.FOUNDRY_BASE_PATH
         );
         return response.status(200).json(capabilities);
       } catch (e) {

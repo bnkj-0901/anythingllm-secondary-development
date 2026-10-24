@@ -10,6 +10,7 @@ import { useTranslation } from "react-i18next";
 const Actions = ({
   message,
   feedbackScore,
+  updateFeedback,
   chatId,
   slug,
   isLastMessage,
@@ -24,7 +25,9 @@ const Actions = ({
   const handleFeedback = async (newFeedback) => {
     const updatedFeedback =
       selectedFeedback === newFeedback ? null : newFeedback;
-    await Workspace.updateChatFeedback(chatId, slug, updatedFeedback);
+    await (updateFeedback
+      ? updateFeedback(chatId, updatedFeedback)
+      : Workspace.updateChatFeedback(chatId, slug, updatedFeedback));
     setSelectedFeedback(updatedFeedback);
   };
 

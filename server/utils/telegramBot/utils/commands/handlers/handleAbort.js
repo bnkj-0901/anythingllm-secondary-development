@@ -5,7 +5,7 @@
  */
 async function handleAbort(ctx, chatId) {
   const { TelegramBotService } = require("../../../index");
-  const service = new TelegramBotService();
+  const service = new TelegramBotService(ctx.config.tenantId);
   const aborted = service.abortChat(chatId);
 
   if (aborted) await ctx.bot.sendMessage(chatId, "Response aborted by user.");

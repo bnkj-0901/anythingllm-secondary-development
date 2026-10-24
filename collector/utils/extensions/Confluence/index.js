@@ -24,6 +24,8 @@ async function loadConfluence(
   },
   response
 ) {
+  const returnDocuments = response.locals.returnDocuments === true;
+  const documents = [];
   if (!personalAccessToken && (!username || !accessToken)) {
     return {
       success: false,
@@ -89,7 +91,7 @@ async function loadConfluence(
         )
       : path.resolve(process.env.STORAGE_DIR, `documents/${outFolder}`);
 
-  if (!fs.existsSync(outFolderPath))
+  if (!returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
 
   docs.forEach((doc) => {
@@ -128,16 +130,19 @@ async function loadConfluence(
     const fileName = sanitizeFileName(
       `${slugify(doc.metadata.title)}-${data.id}`
     );
-    writeToServerDocuments({
-      data,
-      filename: fileName,
-      destinationOverride: outFolderPath,
-    });
+    if (returnDocuments) documents.push(data);
+    else
+      writeToServerDocuments({
+        data,
+        filename: fileName,
+        destinationOverride: outFolderPath,
+      });
   });
 
   return {
     success: true,
     reason: null,
+    ...(returnDocuments ? { documents } : {}),
     data: {
       spaceKey,
       destination: outFolder,

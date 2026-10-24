@@ -13,6 +13,8 @@ const { tokenizeString } = require("../../../tokenizer");
  * @returns
  */
 async function loadGithubRepo(args, response) {
+  const returnDocuments = response.locals.returnDocuments === true;
+  const documents = [];
   const repo = new RepoLoader(args);
   await repo.init();
 
@@ -46,7 +48,7 @@ async function loadGithubRepo(args, response) {
         )
       : path.resolve(process.env.STORAGE_DIR, `documents/${outFolder}`);
 
-  if (!fs.existsSync(outFolderPath))
+  if (!returnDocuments && !fs.existsSync(outFolderPath))
     fs.mkdirSync(outFolderPath, { recursive: true });
 
   for (const doc of docs) {
@@ -71,16 +73,19 @@ async function loadGithubRepo(args, response) {
     console.log(
       `[GitHub Loader]: Saving ${doc.metadata.source} to ${outFolder}`
     );
-    writeToServerDocuments({
-      data,
-      filename: `${slugify(doc.metadata.source)}-${data.id}`,
-      destinationOverride: outFolderPath,
-    });
+    if (returnDocuments) documents.push(data);
+    else
+      writeToServerDocuments({
+        data,
+        filename: `${slugify(doc.metadata.source)}-${data.id}`,
+        destinationOverride: outFolderPath,
+      });
   }
 
   return {
     success: true,
     reason: null,
+    ...(returnDocuments ? { documents } : {}),
     data: {
       author: repo.author,
       repo: repo.project,

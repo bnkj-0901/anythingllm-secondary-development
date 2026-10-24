@@ -1,37 +1,8 @@
-const { WorkspaceChats } = require("../../../models/workspaceChats");
-
-async function resetMemory(
-  workspace,
-  _message,
-  msgUUID,
-  user = null,
-  thread = null
-) {
-  // If thread is present we are wanting to reset this specific thread. Not the whole workspace.
-  thread
-    ? await WorkspaceChats.markThreadHistoryInvalid(
-        workspace.id,
-        user,
-        thread.id
-      )
-    : await WorkspaceChats.markHistoryInvalid(workspace.id, user);
-
-  // If the workspace uses a model router, clear the sticky route and LLM
-  // classification cache so the router re-evaluates from scratch.
+const { Chat } = require("../../../models/workspaceChats");
+async function resetMemory({ctx, threadId, configuration, db}) {
+  await Chat.markThreadHistoryInvalid(ctx, threadId, db);
   const { ModelRouterService } = require("../../router");
-  ModelRouterService.resetForWorkspace(workspace, user, thread);
-
-  return {
-    uuid: msgUUID,
-    type: "textResponse",
-    textResponse: "Chat memory was reset!",
-    sources: [],
-    close: true,
-    error: false,
-    action: "reset_chat",
-  };
+  ModelRouterService.resetForConversation(ctx, threadId, configuration);
+  return {textResponse: "Chat memory was reset!", sources: [], outputs: [], action: "reset_chat"};
 }
-
-module.exports = {
-  resetMemory,
-};
+module.exports = { resetMemory };

@@ -138,13 +138,19 @@ export default function GeneralVectorDatabase() {
     settingsData.VectorDB = selectedVDB;
     for (var [key, value] of formData.entries()) settingsData[key] = value;
 
-    const { error } = await System.updateSystem(settingsData);
+    const { error, reindexRequired, affectedDocuments } =
+      await System.updateSystem(settingsData);
     if (error) {
       showToast(`Failed to save vector database settings: ${error}`, "error");
       setHasChanges(true);
     } else {
       showToast("Vector database preferences saved successfully.", "success");
       setHasChanges(false);
+      if (reindexRequired)
+        showToast(
+          `请重新构建 ${affectedDocuments || 0} 份资料的索引后再使用知识检索。`,
+          "warning"
+        );
     }
     setSaving(false);
     closeModal();
@@ -250,7 +256,7 @@ export default function GeneralVectorDatabase() {
       )}
       <Modal isOpen={isOpen} onClose={closeModal} size="lg">
         <ChangeWarningModal
-          warningText="Switching the vector database will reset all previously embedded documents in all workspaces.\n\nConfirming will clear all embeddings from your vector database and remove all documents from your workspaces. Your uploaded documents will not be deleted, they will be available for re-embedding."
+          warningText="Changing this configuration does not copy existing vectors.\n\nIf documents are already indexed, the proposed configuration must still be able to access those records. Moving to another database requires a separate index rebuild."
           onClose={closeModal}
           onConfirm={handleSaveSettings}
         />

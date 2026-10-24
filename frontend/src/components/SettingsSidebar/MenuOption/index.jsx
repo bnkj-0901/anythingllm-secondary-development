@@ -15,6 +15,7 @@ export default function MenuOption({
   roles = [],
   hidden = false,
   isChild = false,
+  onNavigate,
 }) {
   const storageKey = generateStorageKey({ key: btnText });
   const location = useLocation();
@@ -65,6 +66,9 @@ export default function MenuOption({
       const newExpandedState = !isExpanded;
       setIsExpanded(newExpandedState);
       localStorage.setItem(storageKey, JSON.stringify(newExpandedState));
+    } else if (onNavigate) {
+      e.preventDefault();
+      onNavigate(href.replace(/^#/, ""));
     }
   };
 
@@ -88,7 +92,7 @@ export default function MenuOption({
           className={`flex flex-grow items-center px-[12px] h-[32px] font-medium ${
             isChild ? "hover:text-white" : "text-white light:text-black"
           }`}
-          onClick={hasChildren ? handleClick : undefined}
+          onClick={hasChildren || onNavigate ? handleClick : undefined}
         >
           {icon}
           <p
@@ -124,6 +128,7 @@ export default function MenuOption({
               {...childOption} // flex and roles go here.
               user={user}
               isChild={true}
+              onNavigate={onNavigate}
             />
           ))}
         </div>

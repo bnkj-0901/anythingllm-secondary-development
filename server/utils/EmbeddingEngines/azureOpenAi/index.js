@@ -1,24 +1,29 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
 
 class AzureOpenAiEmbedder {
   constructor() {
     const { AzureOpenAI } = require("openai");
-    if (!process.env.AZURE_OPENAI_ENDPOINT)
+    if (!env.AZURE_OPENAI_ENDPOINT)
       throw new Error("No Azure API endpoint was set.");
-    if (!process.env.AZURE_OPENAI_KEY)
-      throw new Error("No Azure API key was set.");
+    if (!env.AZURE_OPENAI_KEY) throw new Error("No Azure API key was set.");
 
     this.className = "AzureOpenAiEmbedder";
     this.apiVersion = "2024-12-01-preview";
-    const openai = new AzureOpenAI({
-      apiKey: process.env.AZURE_OPENAI_KEY,
-      endpoint: process.env.AZURE_OPENAI_ENDPOINT,
-      apiVersion: this.apiVersion,
-    });
+    const openai = new AzureOpenAI(
+      sdkOptions({
+        apiKey: env.AZURE_OPENAI_KEY,
+        endpoint: env.AZURE_OPENAI_ENDPOINT,
+        apiVersion: this.apiVersion,
+      })
+    );
 
     // We cannot assume the model fallback since the model is based on the deployment name
     // and not the model name - so this will throw on embedding if the model is not defined.
-    this.model = process.env.EMBEDDING_MODEL_PREF;
+    this.model = env.EMBEDDING_MODEL_PREF;
     this.openai = openai;
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits

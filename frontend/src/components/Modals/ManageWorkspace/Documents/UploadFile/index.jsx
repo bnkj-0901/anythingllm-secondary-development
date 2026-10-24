@@ -42,6 +42,11 @@ export default function UploadFile({
   queue,
   onUploadComplete,
   onLinkScraped,
+  showLink = true,
+  extensions = [],
+  disabled = false,
+  multiple = true,
+  onRetry,
 }) {
   const { t } = useTranslation();
   const { ready, files, setFiles, enqueueDrop } = queue;
@@ -76,7 +81,8 @@ export default function UploadFile({
 
   const { getRootProps, getInputProps } = useDropzone({
     onDrop: enqueueDrop,
-    disabled: !ready,
+    disabled: disabled || !ready || queue.busy,
+    multiple,
     getFilesFromEvent: getFilesFromUploadEvent,
   });
 
@@ -88,9 +94,15 @@ export default function UploadFile({
             ? " light:bg-[#E0F2FE] cursor-pointer hover:bg-theme-bg-secondary light:hover:bg-transparent"
             : "cursor-not-allowed"
         }`}
-        {...getRootProps()}
+        {...getRootProps({ "aria-label": "资料拖放区" })}
       >
-        <input {...getInputProps()} />
+        <input
+          {...getInputProps({
+            "aria-label": "选择上传文件",
+            accept: extensions.join(","),
+            disabled: disabled || !ready || queue.busy,
+          })}
+        />
         {ready === false ? (
           <div className="flex flex-col items-center justify-center h-full">
             <CloudArrowUp className="w-8 h-8 text-white/80 light:invert" />
@@ -114,46 +126,75 @@ export default function UploadFile({
         ) : (
           <div className="grid grid-cols-2 gap-2 overflow-auto max-h-[180px] p-1 overflow-y-scroll no-scroll">
             {files.map((file) => (
-              <FileUploadProgress
-                key={file.uid}
-                file={file.file}
-                uuid={file.uid}
-                setFiles={setFiles}
-                slug={workspace.slug}
-                rejected={file?.rejected}
-                reason={file?.reason}
-                folderName={file?.folderName}
-                relativePath={file?.relativePath}
-                onSettled={syncPicker}
-              />
+              <div key={file.uid}>
+                <FileUploadProgress
+                  key={file.uid}
+                  file={file.file}
+                  uuid={file.uid}
+                  setFiles={setFiles}
+                  slug={workspace?.slug}
+                  externalState={queue.uploadAll ? file : null}
+                  rejected={file?.rejected}
+                  reason={file?.reason}
+                  folderName={file?.folderName}
+                  relativePath={file?.relativePath}
+                  onSettled={syncPicker}
+                />
+                {queue.uploadAll && (
+                  <div className="flex justify-end gap-x-2 text-xs text-theme-text-secondary">
+                    {file.status === "failed" && (
+                      <button
+                        type="button"
+                        disabled={queue.busy}
+                        onClick={() => onRetry?.(file.uid)}
+                        aria-label={`重试上传 ${file.file.name}`}
+                      >
+                        重试
+                      </button>
+                    )}
+                    <button
+                      type="button"
+                      disabled={queue.busy}
+                      onClick={() => queue.remove(file.uid)}
+                      aria-label={`移除上传 ${file.file.name}`}
+                    >
+                      移除
+                    </button>
+                  </div>
+                )}
+              </div>
             ))}
           </div>
         )}
       </div>
-      <div className="text-center text-white text-opacity-50 text-xs font-medium w-[560px] py-2">
-        {t("connectors.upload.or-submit-link")}
-      </div>
-      <form onSubmit={handleSendLink} className="flex gap-x-2">
-        <input
-          disabled={fetchingUrl}
-          name="link"
-          // Not type="url" - that would force the user to type the protocol.
-          type="text"
-          inputMode="url"
-          className="border-none disabled:bg-theme-settings-input-bg disabled:text-theme-settings-input-placeholder bg-theme-settings-input-bg text-white placeholder:text-theme-settings-input-placeholder text-sm rounded-lg focus:outline-primary-button active:outline-primary-button outline-none block w-3/4 p-2.5"
-          placeholder={t("connectors.upload.placeholder-link")}
-          autoComplete="off"
-        />
-        <button
-          disabled={fetchingUrl}
-          type="submit"
-          className="disabled:bg-white/20 disabled:text-slate-300 disabled:border-slate-400 disabled:cursor-wait bg bg-transparent hover:bg-slate-200 hover:text-slate-800 w-auto border border-white light:border-theme-modal-border text-sm text-white p-2.5 rounded-lg"
-        >
-          {fetchingUrl
-            ? t("connectors.upload.fetching")
-            : t("connectors.upload.fetch-website")}
-        </button>
-      </form>
+      {showLink && (
+        <>
+          <div className="text-center text-white text-opacity-50 text-xs font-medium w-[560px] py-2">
+            {t("connectors.upload.or-submit-link")}
+          </div>
+          <form onSubmit={handleSendLink} className="flex gap-x-2">
+            <input
+              disabled={fetchingUrl}
+              name="link"
+              // Not type="url" - that would force the user to type the protocol.
+              type="text"
+              inputMode="url"
+              className="border-none disabled:bg-theme-settings-input-bg disabled:text-theme-settings-input-placeholder bg-theme-settings-input-bg text-white placeholder:text-theme-settings-input-placeholder text-sm rounded-lg focus:outline-primary-button active:outline-primary-button outline-none block w-3/4 p-2.5"
+              placeholder={t("connectors.upload.placeholder-link")}
+              autoComplete="off"
+            />
+            <button
+              disabled={fetchingUrl}
+              type="submit"
+              className="disabled:bg-white/20 disabled:text-slate-300 disabled:border-slate-400 disabled:cursor-wait bg bg-transparent hover:bg-slate-200 hover:text-slate-800 w-auto border border-white light:border-theme-modal-border text-sm text-white p-2.5 rounded-lg"
+            >
+              {fetchingUrl
+                ? t("connectors.upload.fetching")
+                : t("connectors.upload.fetch-website")}
+            </button>
+          </form>
+        </>
+      )}
       <div className="mt-6 text-center text-white text-opacity-80 text-xs font-medium w-[560px]">
         {t("connectors.upload.privacy-notice")}
       </div>

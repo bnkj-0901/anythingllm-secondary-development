@@ -174,7 +174,7 @@ class AIbitat {
 
   /**
    * Register a new chat ID for tracking for a given conversation exchange
-   * @param {number} chatId - The ID of the chat to register.
+   * @param {number} chatId - The ID of the personal chat pair to register.
    */
   registerChatId(chatId = null) {
     if (!chatId) return;
@@ -239,6 +239,9 @@ class AIbitat {
         title: name,
         text: content.slice(0, 1_000) + "...continued on in source document...",
         chunkSource: metadata.chunkSource || null,
+        ...(metadata.parsedFileId
+          ? { parsedFileId: metadata.parsedFileId }
+          : {}),
         score: null,
       });
     }
@@ -988,7 +991,10 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
    */
   async #safeProviderCall(providerCall) {
     try {
-      return await providerCall();
+      await this.assertExecutionContext();
+      const result = await providerCall();
+      await this.assertExecutionContext();
+      return result;
     } catch (error) {
       // User-initiated abort - rethrow as-is so the chat loop exits quietly.
       if (this._aborted) throw error;
@@ -997,6 +1003,25 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
       });
       throw new APIError(`The agent model failed to respond: ${error.message}`);
     }
+  }
+
+  async assertExecutionContext() {
+    if (!this.handlerProps?.ctx) return;
+    const ctx =
+      await require("../../../enterprise/execution-context").loadExecutionContext(
+        this.handlerProps.ctx
+      );
+    const sources = this._pendingCitations.filter(
+      (source) => source.documentId
+    );
+    if (
+      sources.length &&
+      (await require("../../../enterprise/rag").currentSources(ctx, sources))
+        .length !== sources.length
+    )
+      throw new Error(
+        "Knowledge authorization changed during this response. Please ask again."
+      );
   }
 
   /**
@@ -1032,8 +1057,18 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
   ) {
     // Bail before any (further) LLM calls when the session was aborted mid-execution.
     if (this._aborted) return null;
+    let delivery = Promise.resolve();
+    let deliveryError = null;
     const eventHandler = (type, data) => {
-      this?.socket?.send(type, data);
+      delivery = delivery
+        .then(async () => {
+          if (deliveryError || this._aborted) return;
+          await this.assertExecutionContext();
+          this?.socket?.send(type, data);
+        })
+        .catch((error) => {
+          deliveryError ||= error;
+        });
     };
 
     // Emit routing notification before the first completion so it appears above the response
@@ -1045,9 +1080,18 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
     }
 
     /** @type {{ functionCall: { name: string, arguments: string }, textResponse: string }} */
-    const completionStream = await this.#safeProviderCall(() =>
-      this.providerInstance.stream(messages, functions, eventHandler)
-    );
+    let completionStream;
+    try {
+      completionStream = await this.#safeProviderCall(() =>
+        this.providerInstance.stream(messages, functions, eventHandler)
+      );
+    } catch (error) {
+      deliveryError ||= error;
+      await delivery;
+      throw error;
+    }
+    await delivery;
+    if (deliveryError) throw deliveryError;
 
     // An abort mid-stream resolves (not throws) with a partial completion,
     // which can include a truncated tool call - never act on it.
@@ -1096,6 +1140,10 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
         `[debug]: ${fn.caller} is attempting to call \`${name}\` tool ${JSON.stringify(args, null, 2)}`
       );
 
+      if (this.handlerProps.ctx)
+        await require("../../../enterprise/execution-context").loadExecutionContext(
+          this.handlerProps.ctx
+        );
       const result = await fn.handler(args);
       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
       this.emitter.emit("toolCallResult", {
@@ -1264,6 +1312,10 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
         `[debug]: ${fn.caller} is attempting to call \`${name}\` tool`
       );
 
+      if (this.handlerProps.ctx)
+        await require("../../../enterprise/execution-context").loadExecutionContext(
+          this.handlerProps.ctx
+        );
       const result = await fn.handler(args);
       Telemetry.sendTelemetry("agent_tool_call", { tool: name }, null, true);
       this.emitter.emit("toolCallResult", {
@@ -1475,7 +1527,7 @@ https://docs.anythingllm.com/agent/intelligent-tool-selection
     const reasoningEffort =
       config.provider === this.defaultProvider?.provider &&
       config.model === this.defaultProvider?.model
-        ? config.reasoningEffort ?? null
+        ? (config.reasoningEffort ?? null)
         : null;
 
     switch (config.provider) {

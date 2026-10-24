@@ -9,8 +9,10 @@ import MobileConnection from "@/models/mobile";
 import ConnectionModal from "./ConnectionModal";
 import DeviceRow from "./DeviceRow";
 import { isMobile } from "react-device-detect";
+import { savedSession } from "@/models/platform";
 
 export default function MobileDevices() {
+  const platform = savedSession()?.identity === "platform";
   const { isOpen, openModal, closeModal } = useModal();
   const [loading, setLoading] = useState(true);
   const [devices, setDevices] = useState([]);
@@ -25,7 +27,7 @@ export default function MobileDevices() {
   useEffect(() => {
     fetchDevices()
       .then((devices) => {
-        if (devices.length === 0) openModal();
+        if (devices.length === 0 && !platform) openModal();
         return devices;
       })
       .finally(() => {
@@ -57,17 +59,19 @@ export default function MobileDevices() {
               </p>
             </div>
             <p className="text-xs leading-[18px] font-base text-theme-text-secondary mt-2">
-              These are the devices that are connected to your desktop
-              application to sync chats, workspaces, and more.
+              Devices are connected to an enterprise user and access that user's
+              personal conversations and authorized knowledge.
             </p>
           </div>
           <div className="w-full justify-end flex">
-            <CTAButton
-              onClick={openModal}
-              className="mt-3 mr-0 mb-4 md:-mb-14 z-10"
-            >
-              <QrCode className="h-4 w-4" weight="bold" /> Register New Device
-            </CTAButton>
+            {!platform && (
+              <CTAButton
+                onClick={openModal}
+                className="mt-3 mr-0 mb-4 md:-mb-14 z-10"
+              >
+                <QrCode className="h-4 w-4" weight="bold" /> Register New Device
+              </CTAButton>
+            )}
           </div>
           <div className="overflow-x-auto mt-6">
             {loading ? (

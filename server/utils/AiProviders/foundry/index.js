@@ -1,3 +1,9 @@
+const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const { v4: uuidv4 } = require("uuid");
 const {
@@ -26,18 +32,31 @@ class FoundryLLM {
   static MAX_DEFAULT_CONTEXT_WINDOW = 16_000;
 
   /** @see FoundryLLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.FOUNDRY_BASE_PATH)
+    if (!env.FOUNDRY_BASE_PATH)
       throw new Error("No Foundry Base Path was set.");
 
     this.className = "FoundryLLM";
-    this.model = modelPreference || process.env.FOUNDRY_MODEL_PREF;
-    this.openai = new OpenAIApi({
-      baseURL: parseFoundryBasePath(process.env.FOUNDRY_BASE_PATH),
-      apiKey: null,
-    });
+    this.model = modelPreference || env.FOUNDRY_MODEL_PREF;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: parseFoundryBasePath(env.FOUNDRY_BASE_PATH),
+        apiKey: null,
+      })
+    );
 
     this.embedder = embedder ?? new NativeEmbedder();
     this.limits = null;
@@ -80,7 +99,8 @@ class FoundryLLM {
    * @returns {Promise<void>}
    */
   async assertModelLoaded() {
-    if (!this.model || FoundryLLM.#loadedModels.has(this.model)) return;
+    if (!this.model || scopedCache(FoundryLLM.#loadedModels).has(this.model))
+      return;
     const FoundryModels = require("./models.js");
 
     // The service reports fully-qualified variant ids while the preference is
@@ -90,7 +110,7 @@ class FoundryLLM {
       (id) => id === this.model || id.split(":")[0] === this.model
     );
     if (isLoaded) {
-      FoundryLLM.#loadedModels.add(this.model);
+      scopedCache(FoundryLLM.#loadedModels).add(this.model);
       return;
     }
 
@@ -100,7 +120,7 @@ class FoundryLLM {
       throw new Error(
         `Could not load ${this.model} into Foundry Local: ${error}`
       );
-    FoundryLLM.#loadedModels.add(this.model);
+    scopedCache(FoundryLLM.#loadedModels).add(this.model);
   }
 
   /**
@@ -119,7 +139,7 @@ class FoundryLLM {
       /premature close/i.test(error?.message ?? "");
     if (!isPrematureClose) return error.message;
 
-    FoundryLLM.#loadedModels.delete(model);
+    scopedCache(FoundryLLM.#loadedModels).delete(model);
     return "Foundry Local crashed trying to reply to this message. You should change the message or try again.";
   }
 
@@ -168,10 +188,12 @@ class FoundryLLM {
           FoundryLLM.modelContextWindows[variant.name] = model.contextLength;
       }
 
-      const openai = new OpenAIApi({
-        baseURL: parseFoundryBasePath(process.env.FOUNDRY_BASE_PATH),
-        apiKey: null,
-      });
+      const openai = new OpenAIApi(
+        sdkOptions({
+          baseURL: parseFoundryBasePath(env.FOUNDRY_BASE_PATH),
+          apiKey: null,
+        })
+      );
       (await openai.models.list().then((result) => result.data)).map(
         (model) => {
           // Whatever the daemon reports wins — it knows how the model was
@@ -201,7 +223,7 @@ class FoundryLLM {
    */
   static async unloadModelFromEngine(modelName) {
     const FoundryModels = require("./models.js");
-    FoundryLLM.#loadedModels.delete(modelName);
+    scopedCache(FoundryLLM.#loadedModels).delete(modelName);
     return await FoundryModels.unloadModel(modelName);
   }
 
@@ -224,7 +246,7 @@ class FoundryLLM {
         `No context window known for ${modelName} - it may be inaccurately reported.`
       );
 
-    const envLimit = Number(process.env.FOUNDRY_MODEL_TOKEN_LIMIT);
+    const envLimit = Number(env.FOUNDRY_MODEL_TOKEN_LIMIT);
     const userDefinedLimit =
       Number.isFinite(envLimit) && envLimit > 0 ? envLimit : null;
 

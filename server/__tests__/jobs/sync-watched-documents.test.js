@@ -1,164 +1,222 @@
-/* eslint-env jest */
-const { sourceIdentifier } = require("../../utils/chats");
-
-const STALE_PUBLISHED = "1/1/2020, 12:00:00 PM";
-const OLD_CONTENT = "the old content of the watched document";
-const NEW_CONTENT = "the new content of the watched document";
-
-let mockResolveConcluded;
-let mockContent = OLD_CONTENT;
-const mockVectorDatabase = {
-  deleteDocumentFromNamespace: jest.fn(),
-  addDocumentToNamespace: jest.fn(),
+const OLD_CONTENT = "the approved content of the watched document";
+const NEW_CONTENT = "the refreshed content of the watched document";
+const mockIdentity = { identity: "tenant", tenantId: "company-a", userId: 101 };
+const mockCollector = { online: jest.fn(), forwardExtensionRequest: jest.fn() };
+const mockKnowledge = {
+  requireDocument: jest.fn(),
+  submitSyncedContent: jest.fn(),
 };
-const mockUpdateSourceDocument = jest.fn();
-const mockSaveRun = jest.fn();
-const mockUpdateQueue = jest.fn();
-
+const mockExecution = { loadExecutionContext: jest.fn() };
+const mockQueue = {
+  validFileTypes: ["link", "github"],
+  maxRepeatFailures: 3,
+  staleDocumentQueues: jest.fn(),
+  calcNextSync: jest.fn(),
+  _update: jest.fn(),
+  saveRun: jest.fn(),
+  unwatch: jest.fn(),
+};
+const mockRun = {
+  statuses: { success: "success", failed: "failed", exited: "exited" },
+  where: jest.fn(),
+};
+const mockDocument = { parseDocumentTypeAndSource: jest.fn() };
 jest.mock("../../jobs/helpers", () => ({
   log: jest.fn(),
-  conclude: jest.fn(() => mockResolveConcluded()),
-  updateSourceDocument: mockUpdateSourceDocument,
-}));
-jest.mock("../../utils/helpers", () => ({
-  getVectorDbClass: jest.fn(() => mockVectorDatabase),
+  conclude: jest.fn(),
 }));
 jest.mock("../../utils/collectorApi", () => ({
-  CollectorApi: jest.fn(() => ({
-    online: jest.fn().mockResolvedValue(true),
-    forwardExtensionRequest: jest
-      .fn()
-      .mockResolvedValue({ content: NEW_CONTENT }),
-  })),
+  CollectorApi: jest.fn(() => mockCollector),
 }));
-jest.mock("../../utils/files", () => ({
-  fileData: jest.fn(async () => ({
-    title: "watched-and-pinned.html",
-    published: STALE_PUBLISHED,
-    pageContent: mockContent,
-  })),
-}));
-jest.mock("../../models/vectors", () => ({
-  DocumentVectors: { delete: jest.fn() },
-}));
-jest.mock("../../models/documents", () => ({
-  Document: {
-    parseDocumentTypeAndSource: jest.fn(() => ({
-      metadata: { chunkSource: "link://example.com" },
-      type: "link",
-      source: "https://example.com",
-    })),
-    where: jest.fn().mockResolvedValue([
-      {
-        docId: "other-workspace-doc-id",
-        docpath: "custom-documents/watched-and-pinned.json",
-        workspace: { slug: "other-workspace", name: "Other Workspace" },
-      },
-      {
-        docId: "third-workspace-doc-id",
-        docpath: "custom-documents/watched-and-pinned.json",
-        workspace: { slug: "third-workspace", name: "Third Workspace" },
-      },
-    ]),
-  },
-}));
+jest.mock("../../models/documents", () => ({ Document: mockDocument }));
 jest.mock("../../models/documentSyncQueue", () => ({
-  DocumentSyncQueue: {
-    validFileTypes: ["link"],
-    staleDocumentQueues: jest.fn().mockResolvedValue([
-      {
-        id: 1,
-        workspaceDoc: {
-          id: 1,
-          docId: "workspace-doc-id",
-          docpath: "custom-documents/watched-and-pinned.json",
-          filename: "watched-and-pinned.json",
-          workspace: { slug: "workspace", name: "Workspace" },
-        },
-      },
-    ]),
-    calcNextSync: jest.fn(() => new Date()),
-    _update: mockUpdateQueue,
-    saveRun: mockSaveRun,
-  },
+  DocumentSyncQueue: mockQueue,
 }));
-jest.mock("../../models/documentSyncRun", () => ({
-  DocumentSyncRun: {
-    statuses: { success: "success", failed: "failed", exited: "exited" },
-  },
-}));
+jest.mock("../../models/documentSyncRun", () => ({ DocumentSyncRun: mockRun }));
+jest.mock("../../enterprise/knowledge", () => mockKnowledge);
+jest.mock("../../enterprise/execution-context", () => mockExecution);
+const { syncWatchedDocuments } = require("../../jobs/sync-watched-documents");
+let queue;
 
-async function runJob() {
-  jest.resetModules();
-  const concluded = new Promise((resolve) => (mockResolveConcluded = resolve));
-  require("../../jobs/sync-watched-documents");
-  await concluded;
-}
-
-// A pinned document is de-duplicated out of the RAG results by comparing the `sourceIdentifier` of
-// the on-disk document against the identifier of every chunk returned by the vector database. A
-// re-sync rewrites both of those, so if they drift apart the pinned document is also returned as
-// chunks and gets injected into the context twice.
-describe("watched document re-sync", () => {
-  beforeAll(runJob);
-
-  it("stamps the workspace vectors with the source identifier written to disk", () => {
-    const [, vectorPayload] =
-      mockVectorDatabase.addDocumentToNamespace.mock.calls[0];
-    const [, diskPayload] = mockUpdateSourceDocument.mock.calls[0];
-
-    expect(diskPayload.published).not.toBe(STALE_PUBLISHED);
-    expect(sourceIdentifier(vectorPayload)).toBe(sourceIdentifier(diskPayload));
+beforeEach(() => {
+  jest.clearAllMocks();
+  queue = {
+    id: 1,
+    tenantId: mockIdentity.tenantId,
+    userId: mockIdentity.userId,
+    document: {
+      id: "watched-document",
+      tenantId: mockIdentity.tenantId,
+      libraryId: "authorized-library",
+      title: "watched.html",
+      content: OLD_CONTENT,
+    },
+  };
+  mockQueue.staleDocumentQueues.mockResolvedValue([queue]);
+  mockQueue.calcNextSync.mockReturnValue(new Date("2026-10-30T00:00:00.000Z"));
+  mockCollector.online.mockResolvedValue(true);
+  mockCollector.forwardExtensionRequest.mockResolvedValue({
+    content: NEW_CONTENT,
   });
-
-  it("stamps the vectors of every other workspace referencing the document with that same identifier", () => {
-    const [, bloomedPayload] =
-      mockVectorDatabase.addDocumentToNamespace.mock.calls[1];
-    const [, diskPayload] = mockUpdateSourceDocument.mock.calls[0];
-
-    expect(sourceIdentifier(bloomedPayload)).toBe(
-      sourceIdentifier(diskPayload)
-    );
+  mockExecution.loadExecutionContext.mockResolvedValue(mockIdentity);
+  mockKnowledge.requireDocument.mockResolvedValue(queue.document);
+  mockKnowledge.submitSyncedContent.mockResolvedValue({
+    approvalRequired: false,
+  });
+  mockRun.where.mockResolvedValue([]);
+  mockDocument.parseDocumentTypeAndSource.mockReturnValue({
+    metadata: { chunkSource: "link://https://example.com" },
+    type: "link",
+    source: "https://example.com",
   });
 });
 
-it.each(["workspace", "other-workspace"])(
-  "records a failed update to %s without retrying it",
-  async (failedWorkspace) => {
-    jest.clearAllMocks();
-    mockContent = OLD_CONTENT;
-    mockUpdateSourceDocument.mockImplementation((_, data) => {
-      mockContent = data.pageContent;
-    });
-    mockVectorDatabase.addDocumentToNamespace.mockImplementation(
-      async (slug) => ({
-        vectorized: slug !== failedWorkspace,
-        error: "write failed",
-      })
-    );
-    await runJob();
-    expect(
-      mockVectorDatabase.addDocumentToNamespace.mock.calls.map(([slug]) => slug)
-    ).toEqual(["workspace", "other-workspace", "third-workspace"]);
-    expect(mockContent).toBe(NEW_CONTENT);
-    expect(mockUpdateQueue).toHaveBeenCalledTimes(1);
-    expect(mockSaveRun).toHaveBeenLastCalledWith(1, "failed", {
-      filename: "watched-and-pinned.json",
-      workspacesModified: [
-        "workspace",
-        "other-workspace",
-        "third-workspace",
-      ].filter((slug) => slug !== failedWorkspace),
-      reason: `Failed to embed the new content into: ${failedWorkspace} (write failed)`,
-    });
+test("changed private content uses the authorized mutation/indexing pipeline once and unchanged content does not reindex", async () => {
+  mockKnowledge.submitSyncedContent.mockImplementationOnce(async () => {
+    queue.document.content = NEW_CONTENT;
+    return { approvalRequired: false };
+  });
+  await syncWatchedDocuments();
+  expect(mockExecution.loadExecutionContext).toHaveBeenCalledWith(queue);
+  expect(mockKnowledge.requireDocument).toHaveBeenCalledWith(
+    mockIdentity,
+    "watched-document"
+  );
+  expect(mockKnowledge.submitSyncedContent).toHaveBeenCalledWith(
+    mockIdentity,
+    "watched-document",
+    NEW_CONTENT
+  );
+  expect(mockCollector.forwardExtensionRequest).toHaveBeenCalledWith({
+    endpoint: "/ext/resync-source-document",
+    method: "POST",
+    body: JSON.stringify({
+      type: "link",
+      options: { link: "https://example.com" },
+    }),
+  });
+  expect(mockQueue._update).toHaveBeenCalledWith(
+    1,
+    expect.objectContaining({
+      failedAttempts: 0,
+      nextSyncAt: new Date("2026-10-30T00:00:00.000Z"),
+    })
+  );
+  expect(mockQueue.saveRun).toHaveBeenLastCalledWith(1, "success", {
+    filename: "watched.html",
+    libraryId: "authorized-library",
+    approvalRequired: false,
+  });
+  await syncWatchedDocuments();
+  expect(mockKnowledge.submitSyncedContent).toHaveBeenCalledTimes(1);
+  expect(mockQueue.saveRun).toHaveBeenLastCalledWith(1, "exited", {
+    filename: "watched.html",
+    workspacesModified: [],
+    reason: "Content unchanged.",
+  });
+});
 
-    mockVectorDatabase.addDocumentToNamespace.mockClear();
-    await runJob();
-    expect(mockVectorDatabase.addDocumentToNamespace).not.toHaveBeenCalled();
-    expect(mockSaveRun).toHaveBeenLastCalledWith(
-      1,
-      "exited",
-      expect.any(Object)
-    );
+test("public revisions are submitted for approval while the published document remains intact", async () => {
+  mockKnowledge.submitSyncedContent.mockResolvedValue({
+    approvalRequired: true,
+  });
+  await syncWatchedDocuments();
+  expect(queue.document.content).toBe(OLD_CONTENT);
+  expect(mockKnowledge.submitSyncedContent).toHaveBeenCalledTimes(1);
+  expect(mockQueue.saveRun).toHaveBeenLastCalledWith(1, "success", {
+    filename: "watched.html",
+    libraryId: "authorized-library",
+    approvalRequired: true,
+  });
+});
+
+test("encrypted connector sources retain their original chunkSource resync contract", async () => {
+  mockDocument.parseDocumentTypeAndSource.mockReturnValue({
+    metadata: { chunkSource: "github://encrypted-source" },
+    type: "github",
+    source: "github://encrypted-source",
+  });
+  await syncWatchedDocuments();
+  expect(mockCollector.forwardExtensionRequest).toHaveBeenCalledWith(
+    expect.objectContaining({
+      body: JSON.stringify({
+        type: "github",
+        options: { chunkSource: "github://encrypted-source" },
+      }),
+    })
+  );
+});
+
+test.each(["disabled employee", "revoked knowledge grant"])(
+  "%s pauses watching before contacting the source",
+  async (reason) => {
+    if (reason === "disabled employee")
+      mockExecution.loadExecutionContext.mockRejectedValue(new Error(reason));
+    else mockKnowledge.requireDocument.mockRejectedValue(new Error(reason));
+    await syncWatchedDocuments();
+    expect(mockCollector.forwardExtensionRequest).not.toHaveBeenCalled();
+    expect(mockKnowledge.submitSyncedContent).not.toHaveBeenCalled();
+    expect(mockQueue._update).not.toHaveBeenCalled();
+    expect(mockQueue.unwatch).not.toHaveBeenCalled();
   }
 );
+
+test("missing source content records failure and retries on the next worker interval", async () => {
+  mockCollector.forwardExtensionRequest.mockResolvedValue({
+    success: false,
+    content: null,
+  });
+  await syncWatchedDocuments();
+  await syncWatchedDocuments();
+  expect(mockCollector.forwardExtensionRequest).toHaveBeenCalledTimes(2);
+  expect(mockKnowledge.submitSyncedContent).not.toHaveBeenCalled();
+  expect(mockQueue.saveRun).toHaveBeenLastCalledWith(1, "failed", {
+    filename: "watched.html",
+    workspacesModified: [],
+    reason: "No content found.",
+  });
+  expect(mockQueue.unwatch).not.toHaveBeenCalled();
+  expect(mockQueue._update).not.toHaveBeenCalled();
+});
+
+test("only consecutive failed refreshes reach the original removal threshold; unchanged exits are not failures", async () => {
+  mockCollector.forwardExtensionRequest.mockResolvedValue({ content: null });
+  mockRun.where.mockResolvedValueOnce([
+    { status: "failed" },
+    { status: "exited" },
+    { status: "failed" },
+  ]);
+  await syncWatchedDocuments();
+  expect(mockQueue.unwatch).not.toHaveBeenCalled();
+  mockRun.where.mockResolvedValue([
+    { status: "failed" },
+    { status: "failed" },
+    { status: "failed" },
+  ]);
+  await syncWatchedDocuments();
+  expect(mockRun.where).toHaveBeenCalledWith({ queueId: 1 }, 3, {
+    createdAt: "desc",
+  });
+  expect(mockQueue.unwatch).toHaveBeenCalledWith(mockIdentity, queue.document);
+});
+
+test("invalid source metadata removes only the bound employee's watch", async () => {
+  mockDocument.parseDocumentTypeAndSource.mockReturnValue({
+    metadata: null,
+    type: "unsupported",
+    source: null,
+  });
+  await syncWatchedDocuments();
+  expect(mockQueue.unwatch).toHaveBeenCalledWith(mockIdentity, queue.document);
+  expect(mockCollector.forwardExtensionRequest).not.toHaveBeenCalled();
+});
+
+test("empty queues and an offline collector leave stored content and schedules untouched", async () => {
+  mockQueue.staleDocumentQueues.mockResolvedValueOnce([]);
+  await syncWatchedDocuments();
+  expect(mockCollector.online).not.toHaveBeenCalled();
+  mockCollector.online.mockResolvedValue(false);
+  await syncWatchedDocuments();
+  expect(mockKnowledge.submitSyncedContent).not.toHaveBeenCalled();
+  expect(mockQueue._update).not.toHaveBeenCalled();
+});

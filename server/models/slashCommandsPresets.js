@@ -1,143 +1,47 @@
 const { v4 } = require("uuid");
 const prisma = require("../utils/prisma");
+const { chatScope } = require("./workspaceChats");
 const CMD_REGEX = new RegExp(/[^a-zA-Z0-9_-]/g);
 
 const SlashCommandPresets = {
-  formatCommand: function (command = "") {
+  formatCommand(command = "") {
     if (!command || command.length < 2) return `/${v4().split("-")[0]}`;
-
-    let adjustedCmd = command.toLowerCase(); // force lowercase
-    if (!adjustedCmd.startsWith("/")) adjustedCmd = `/${adjustedCmd}`; // Fix if no preceding / is found.
-    return `/${adjustedCmd.slice(1).toLowerCase().replace(CMD_REGEX, "-")}`; // replace any invalid chars with '-'
+    let adjustedCmd = command.toLowerCase();
+    if (!adjustedCmd.startsWith("/")) adjustedCmd = `/${adjustedCmd}`;
+    return `/${adjustedCmd.slice(1).toLowerCase().replace(CMD_REGEX, "-")}`;
   },
-
-  get: async function (clause = {}) {
-    try {
-      const preset = await prisma.slash_command_presets.findFirst({
-        where: clause,
-      });
-      return preset || null;
-    } catch (error) {
-      console.error(error.message);
-      return null;
-    }
+  get(ctx, clause = {}, db = prisma) {
+    return db.slash_command_presets.findFirst({ where: { ...clause, ...chatScope(ctx) } });
   },
-
-  where: async function (clause = {}, limit) {
-    try {
-      const presets = await prisma.slash_command_presets.findMany({
-        where: clause,
-        take: limit || undefined,
-      });
-      return presets;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+  where(ctx, clause = {}, limit, db = prisma) {
+    return db.slash_command_presets.findMany({
+      where: { ...clause, ...chatScope(ctx) },
+      take: limit || undefined,
+      orderBy: { createdAt: "asc" },
+    });
   },
-
-  // Command + userId must be unique combination.
-  create: async function (userId = null, presetData = {}) {
-    try {
-      const existingPreset = await this.get({
-        userId: userId ? Number(userId) : null,
-        command: String(presetData.command),
-      });
-
-      if (existingPreset) {
-        console.log(
-          "SlashCommandPresets.create - preset already exists - will not create"
-        );
-        return existingPreset;
-      }
-
-      const preset = await prisma.slash_command_presets.create({
-        data: {
-          ...presetData,
-          // This field (uid) is either the user_id or 0 (for non-multi-user mode).
-          // the UID field enforces the @@unique(userId, command) constraint since
-          // the real relational field (userId) cannot be non-null so this 'dummy' field gives us something
-          // to constrain against within the context of prisma and sqlite that works.
-          uid: userId ? Number(userId) : 0,
-          userId: userId ? Number(userId) : null,
-        },
-      });
-      return preset;
-    } catch (error) {
-      console.error("Failed to create preset", error.message);
-      return null;
-    }
+  async create(ctx, presetData = {}, db = prisma) {
+    const scope = chatScope(ctx);
+    const command = this.formatCommand(presetData.command);
+    return db.slash_command_presets.upsert({
+      where: { tenantId_userId_command: { ...scope, command } },
+      create: { ...scope, command, prompt: String(presetData.prompt), description: String(presetData.description || "") },
+      update: {},
+    });
   },
-
-  getUserPresets: async function (userId = null) {
-    try {
-      return (
-        await prisma.slash_command_presets.findMany({
-          where: { userId: !!userId ? Number(userId) : null },
-          orderBy: { createdAt: "asc" },
-        })
-      )?.map((preset) => ({
-        id: preset.id,
-        command: preset.command,
-        prompt: preset.prompt,
-        description: preset.description,
-      }));
-    } catch (error) {
-      console.error("Failed to get user presets", error.message);
-      return [];
-    }
+  async getUserPresets(ctx, db = prisma) {
+    return (await this.where(ctx, {}, undefined, db)).map(({id, command, prompt, description}) => ({id, command, prompt, description}));
   },
-
-  update: async function (presetId = null, presetData = {}) {
-    try {
-      const preset = await prisma.slash_command_presets.update({
-        where: { id: Number(presetId) },
-        data: presetData,
-      });
-      return preset;
-    } catch (error) {
-      console.error("Failed to update preset", error.message);
-      return null;
-    }
+  async update(ctx, presetId, presetData = {}, db = prisma) {
+    const result = await db.slash_command_presets.updateMany({
+      where: { id: Number(presetId), ...chatScope(ctx) },
+      data: { command: this.formatCommand(presetData.command), prompt: String(presetData.prompt), description: String(presetData.description || "") },
+    });
+    return result.count ? this.get(ctx, { id: Number(presetId) }, db) : null;
   },
-
-  delete: async function (presetId = null) {
-    try {
-      await prisma.slash_command_presets.delete({
-        where: { id: Number(presetId) },
-      });
-      return true;
-    } catch (error) {
-      console.error("Failed to delete preset", error.message);
-      return false;
-    }
-  },
-
-  /**
-   * Migrates all slash command presets with null userId to the specified admin user.
-   * Called during multi-user mode enablement to assign orphaned presets to the new admin.
-   * @param {number} adminUserId - The admin user ID to assign presets to
-   * @returns {Promise<void>}
-   */
-  migrateToMultiUser: async function (adminUserId) {
-    try {
-      await prisma.slash_command_presets.updateMany({
-        where: { userId: null },
-        data: {
-          userId: adminUserId,
-          uid: adminUserId,
-        },
-      });
-      console.log(
-        "Successfully migrated slash command presets to multi-user mode"
-      );
-    } catch (error) {
-      console.error(
-        "Error migrating slash command presets to multi-user mode:",
-        error
-      );
-    }
+  async delete(ctx, presetId, db = prisma) {
+    const result = await db.slash_command_presets.deleteMany({where: { id: Number(presetId), ...chatScope(ctx) }});
+    return result.count > 0;
   },
 };
-
 module.exports.SlashCommandPresets = SlashCommandPresets;

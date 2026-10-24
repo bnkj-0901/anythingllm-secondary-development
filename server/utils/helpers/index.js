@@ -310,58 +310,68 @@ function getLLMProviderConnector({ provider = null, model = null } = {}) {
  * Returns the EmbedderProvider by itself to whatever is currently in the system settings.
  * @returns {BaseEmbedderProvider}
  */
-function getEmbeddingEngineSelection() {
+function getEmbeddingEngineClass(engineSelection = null) {
   const { NativeEmbedder } = require("../EmbeddingEngines/native");
-  const engineSelection = process.env.EMBEDDING_ENGINE;
   switch (engineSelection) {
     case "openai":
       const { OpenAiEmbedder } = require("../EmbeddingEngines/openAi");
-      return new OpenAiEmbedder();
+      return OpenAiEmbedder;
     case "azure":
       const {
         AzureOpenAiEmbedder,
       } = require("../EmbeddingEngines/azureOpenAi");
-      return new AzureOpenAiEmbedder();
+      return AzureOpenAiEmbedder;
     case "localai":
       const { LocalAiEmbedder } = require("../EmbeddingEngines/localAi");
-      return new LocalAiEmbedder();
+      return LocalAiEmbedder;
     case "ollama":
       const { OllamaEmbedder } = require("../EmbeddingEngines/ollama");
-      return new OllamaEmbedder();
+      return OllamaEmbedder;
     case "native":
-      return new NativeEmbedder();
+      return NativeEmbedder;
     case "lmstudio":
       const { LMStudioEmbedder } = require("../EmbeddingEngines/lmstudio");
-      return new LMStudioEmbedder();
+      return LMStudioEmbedder;
     case "cohere":
       const { CohereEmbedder } = require("../EmbeddingEngines/cohere");
-      return new CohereEmbedder();
+      return CohereEmbedder;
     case "voyageai":
       const { VoyageAiEmbedder } = require("../EmbeddingEngines/voyageAi");
-      return new VoyageAiEmbedder();
+      return VoyageAiEmbedder;
     case "litellm":
       const { LiteLLMEmbedder } = require("../EmbeddingEngines/liteLLM");
-      return new LiteLLMEmbedder();
+      return LiteLLMEmbedder;
     case "mistral":
       const { MistralEmbedder } = require("../EmbeddingEngines/mistral");
-      return new MistralEmbedder();
+      return MistralEmbedder;
     case "generic-openai":
       const {
         GenericOpenAiEmbedder,
       } = require("../EmbeddingEngines/genericOpenAi");
-      return new GenericOpenAiEmbedder();
+      return GenericOpenAiEmbedder;
     case "gemini":
       const { GeminiEmbedder } = require("../EmbeddingEngines/gemini");
-      return new GeminiEmbedder();
+      return GeminiEmbedder;
     case "openrouter":
       const { OpenRouterEmbedder } = require("../EmbeddingEngines/openRouter");
-      return new OpenRouterEmbedder();
+      return OpenRouterEmbedder;
     case "lemonade":
       const { LemonadeEmbedder } = require("../EmbeddingEngines/lemonade");
-      return new LemonadeEmbedder();
+      return LemonadeEmbedder;
     default:
-      return new NativeEmbedder();
+      return null;
   }
+}
+
+// Existing callers retain the native fallback. SaaS callers can pass the
+// request's engine explicitly and validate it with getEmbeddingEngineClass.
+function getEmbeddingEngineSelection(engineSelection = null) {
+  const { env } = require("../../enterprise/ai/connection-context");
+  const { NativeEmbedder } = require("../EmbeddingEngines/native");
+  const Class = getEmbeddingEngineClass(
+    engineSelection || env.EMBEDDING_ENGINE
+  );
+  return new (Class || NativeEmbedder)();
 }
 
 /**
@@ -631,12 +641,13 @@ function getBaseLLMProviderModel({ provider = null } = {}) {
 // and by default we assume it can handle 1,000 chars, but some models use work with smaller
 // chars so here we can override that value when embedding information.
 function maximumChunkLength() {
+  const { env } = require("../../enterprise/ai/connection-context");
   if (
-    !!process.env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH &&
-    !isNaN(process.env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH) &&
-    Number(process.env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH) > 1
+    !!env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH &&
+    !isNaN(env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH) &&
+    Number(env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH) > 1
   )
-    return Number(process.env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH);
+    return Number(env.EMBEDDING_MODEL_MAX_CHUNK_LENGTH);
 
   return 1_000;
 }
@@ -815,6 +826,7 @@ function stripThinkingFromText(text = "") {
 }
 
 module.exports = {
+  getEmbeddingEngineClass,
   getEmbeddingEngineSelection,
   getImageGeneratorProvider,
   maximumChunkLength,

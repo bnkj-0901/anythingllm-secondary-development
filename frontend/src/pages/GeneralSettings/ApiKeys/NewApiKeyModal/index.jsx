@@ -4,6 +4,7 @@ import Admin from "@/models/admin";
 import paths from "@/utils/paths";
 import { userFromStorage } from "@/utils/request";
 import System from "@/models/system";
+import ExecutionIdentity from "@/components/lib/ExecutionIdentity";
 import { useTranslation } from "react-i18next";
 import {
   ModalHeader,
@@ -20,6 +21,7 @@ export default function NewApiKeyModal({ closeModal, onSuccess }) {
   const [name, setName] = useState("");
   const [error, setError] = useState(null);
   const [copied, setCopied] = useState(false);
+  const [execution, setExecution] = useState({ tenantId: "", userId: "" });
 
   const handleCreate = async (e) => {
     setError(null);
@@ -29,6 +31,7 @@ export default function NewApiKeyModal({ closeModal, onSuccess }) {
 
     const { apiKey: newApiKey, error } = await Model.generateApiKey({
       name,
+      ...execution,
     });
     if (!!newApiKey) {
       setApiKey(newApiKey);
@@ -57,6 +60,9 @@ export default function NewApiKeyModal({ closeModal, onSuccess }) {
     <form onSubmit={handleCreate} className="flex flex-col gap-y-5">
       <ModalHeader title={t("api.modal.title")} onClose={closeModal} />
       <ModalBody>
+        {!apiKey && (
+          <ExecutionIdentity value={execution} onChange={setExecution} />
+        )}
         {error && (
           <p className="text-red-400 text-sm">
             {t("api.messages.error", { error })}

@@ -198,6 +198,10 @@ export function normalizeSources(sources) {
       );
       return {
         id: `source-${index}`,
+        citationNumber:
+          Number.isInteger(source.citationNumber) && source.citationNumber > 0
+            ? source.citationNumber
+            : index + 1,
         title,
         summary: summary.slice(0, 1600),
         truncated: summary.length > 1600,

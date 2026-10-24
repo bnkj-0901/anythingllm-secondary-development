@@ -1,8 +1,7 @@
 const fs = require("fs");
 const path = require("path");
 const { log, conclude } = require("./helpers/index.js");
-const { WorkspaceChats } = require("../models/workspaceChats.js");
-const { ScheduledJobRun } = require("../models/scheduledJobRun.js");
+const prisma = require("../utils/prisma");
 const {
   generatedImagesPath,
   GENERATED_IMAGE_FILENAME_PATTERN,
@@ -13,7 +12,7 @@ const { safeJsonParse } = require("../utils/http/index.js");
 // the window between writing it to disk and persisting its chat reference.
 const MIN_AGE_MS = 60 * 60 * 1000;
 
-(async () => {
+async function cleanupGeneratedImages() {
   try {
     if (!fs.existsSync(generatedImagesPath)) return;
 
@@ -46,13 +45,11 @@ const MIN_AGE_MS = 60 * 60 * 1000;
   } catch (error) {
     console.error(error);
     log(`Error during cleanup: ${error.message}`);
-  } finally {
-    conclude();
   }
-})();
+}
 
 /**
- * Collects every generated-image filename referenced by an active chat or
+ * Collects every generated-image filename referenced by retained chat history or
  * completed scheduled job run.
  * @returns {Promise<Set<string>>}
  */
@@ -80,7 +77,7 @@ function extractImageFilenames(jsonString, into) {
 }
 
 /**
- * Yields active chats that reference a generated image, one batch at a time, so
+ * Yields all retained chats that reference a generated image, one batch at a time, so
  * the full chat table is never held in memory. The `img-` filter narrows the
  * scan to chats that can actually hold an image reference.
  * @param {number} batchSize - chats fetched per query
@@ -89,12 +86,13 @@ function extractImageFilenames(jsonString, into) {
 async function* activeImageChats(batchSize = 50) {
   let offset = 0;
   while (true) {
-    const chats = await WorkspaceChats.where(
-      { include: true, response: { contains: "img-" } },
-      batchSize,
-      { id: "asc" },
-      offset
-    );
+    const chats = await prisma.chats.findMany({
+      where: { include: true, response: { contains: "img-" } },
+      select: { response: true },
+      take: batchSize,
+      orderBy: { id: "asc" },
+      skip: offset,
+    });
     if (chats.length === 0) return;
     yield* chats;
     if (chats.length < batchSize) return;
@@ -110,16 +108,19 @@ async function* activeImageChats(batchSize = 50) {
 async function* completedImageRuns(batchSize = 50) {
   let offset = 0;
   while (true) {
-    const runs = await ScheduledJobRun.where(
-      { status: "completed", result: { contains: "img-" } },
-      batchSize,
-      { id: "asc" },
-      {},
-      offset
-    );
+    const runs = await prisma.scheduled_job_runs.findMany({
+      where: { status: "completed", result: { contains: "img-" } },
+      select: { result: true },
+      take: batchSize,
+      orderBy: { id: "asc" },
+      skip: offset,
+    });
     if (runs.length === 0) return;
     yield* runs;
     if (runs.length < batchSize) return;
     offset += runs.length;
   }
 }
+
+if (require.main === module) cleanupGeneratedImages().finally(conclude);
+module.exports = { cleanupGeneratedImages, referencedImageFilenames };

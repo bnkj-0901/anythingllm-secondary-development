@@ -7,7 +7,7 @@ function WrapTTS({ children }) {
   return <div className="mx-2">{children}</div>;
 }
 
-export default function TTSMessage({ slug, chatId, message }) {
+export default function TTSMessage({ slug, chatId, message, fetchAudio }) {
   const { settings, provider, loading } = useTTSProvider();
   if (!chatId || loading) return null;
 
@@ -18,7 +18,11 @@ export default function TTSMessage({ slug, chatId, message }) {
     case "kokoro":
       return (
         <WrapTTS>
-          <AsyncTTSMessage chatId={chatId} slug={slug} />
+          <AsyncTTSMessage
+            chatId={chatId}
+            slug={slug}
+            fetchAudio={fetchAudio}
+          />
         </WrapTTS>
       );
     case "piper_local":

@@ -1,3 +1,7 @@
+const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   LLMPerformanceMonitor,
@@ -13,9 +17,9 @@ const {
 
 class VertexLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.VERTEX_AI_LLM_API_KEY)
+    if (!env.VERTEX_AI_LLM_API_KEY)
       throw new Error("No Vertex AI API key was set.");
-    if (!process.env.VERTEX_AI_LLM_PROJECT_ID)
+    if (!env.VERTEX_AI_LLM_PROJECT_ID)
       throw new Error("No Vertex AI project ID was set.");
     this.className = "VertexLLM";
     const { OpenAI: OpenAIApi } = require("openai");
@@ -23,18 +27,18 @@ class VertexLLM {
     // Vertex only accepts the API key via `x-goog-api-key` and rejects any
     // request that also carries an Authorization header, so the SDK's own
     // bearer header must be removed (a null default header deletes it).
-    this.openai = new OpenAIApi({
-      apiKey: "anythingllm",
-      baseURL: VertexLLM.openaiBaseURL(),
-      defaultHeaders: {
-        Authorization: null,
-        "x-goog-api-key": process.env.VERTEX_AI_LLM_API_KEY,
-      },
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: "anythingllm",
+        baseURL: VertexLLM.openaiBaseURL(),
+        defaultHeaders: {
+          Authorization: null,
+          "x-goog-api-key": env.VERTEX_AI_LLM_API_KEY,
+        },
+      })
+    );
     this.model =
-      modelPreference ||
-      process.env.VERTEX_AI_LLM_MODEL_PREF ||
-      "gemini-2.5-flash";
+      modelPreference || env.VERTEX_AI_LLM_MODEL_PREF || "gemini-2.5-flash";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -58,8 +62,8 @@ class VertexLLM {
    * @returns {string}
    */
   static openaiBaseURL() {
-    const projectId = process.env.VERTEX_AI_LLM_PROJECT_ID;
-    const region = process.env.VERTEX_AI_LLM_REGION || "global";
+    const projectId = env.VERTEX_AI_LLM_PROJECT_ID;
+    const region = env.VERTEX_AI_LLM_REGION || "global";
     const host =
       region === "global"
         ? "https://aiplatform.googleapis.com"
@@ -112,7 +116,7 @@ class VertexLLM {
     const model = String(modelName ?? "")
       .split("/")
       .pop();
-    const userLimit = Number(process.env.VERTEX_AI_LLM_MODEL_TOKEN_LIMIT);
+    const userLimit = Number(env.VERTEX_AI_LLM_MODEL_TOKEN_LIMIT);
     return (
       MODEL_MAP.get("vertex", model) ??
       MODEL_MAP.get("gemini", model) ??

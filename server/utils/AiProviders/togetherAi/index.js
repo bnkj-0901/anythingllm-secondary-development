@@ -1,3 +1,8 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -13,14 +18,15 @@ const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
 
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "togetherAi")
     : path.resolve(__dirname, `../../../storage/models/togetherAi`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 function cachedTogetherAiModels() {
-  const cacheModelPath = path.resolve(cacheFolder, "models.json");
+  const cacheModelPath = path.resolve(cacheFolder(), "models.json");
   if (!fs.existsSync(cacheModelPath)) return [];
   return safeJsonParse(
     fs.readFileSync(cacheModelPath, { encoding: "utf-8" }),
@@ -29,8 +35,8 @@ function cachedTogetherAiModels() {
 }
 
 async function togetherAiModels(apiKey = null) {
-  const cacheModelPath = path.resolve(cacheFolder, "models.json");
-  const cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+  const cacheModelPath = path.resolve(cacheFolder(), "models.json");
+  const cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
 
   // If cache exists and is less than 1 week old, use it
   if (fs.existsSync(cacheModelPath) && fs.existsSync(cacheAtPath)) {
@@ -47,10 +53,12 @@ async function togetherAiModels(apiKey = null) {
 
   try {
     const { OpenAI: OpenAIApi } = require("openai");
-    const openai = new OpenAIApi({
-      baseURL: "https://api.together.xyz/v1",
-      apiKey: apiKey || process.env.TOGETHER_AI_API_KEY || null,
-    });
+    const openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.together.xyz/v1",
+        apiKey: apiKey || env.TOGETHER_AI_API_KEY || null,
+      })
+    );
 
     const response = await openai.models.list();
 
@@ -67,8 +75,8 @@ async function togetherAiModels(apiKey = null) {
       }));
 
     // Cache the results
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
     fs.writeFileSync(cacheModelPath, JSON.stringify(validModels), {
       encoding: "utf-8",
     });
@@ -92,17 +100,19 @@ async function togetherAiModels(apiKey = null) {
 
 class TogetherAiLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.TOGETHER_AI_API_KEY)
+    if (!env.TOGETHER_AI_API_KEY)
       throw new Error("No TogetherAI API key was set.");
     const { OpenAI: OpenAIApi } = require("openai");
     this.className = "TogetherAiLLM";
-    this.openai = new OpenAIApi({
-      baseURL: "https://api.together.xyz/v1",
-      apiKey: process.env.TOGETHER_AI_API_KEY ?? null,
-    });
-    this.model = modelPreference || process.env.TOGETHER_AI_MODEL_PREF;
-    this.maxTokens = process.env.TOGETHER_AI_MAX_TOKENS
-      ? toValidNumber(process.env.TOGETHER_AI_MAX_TOKENS, null)
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: "https://api.together.xyz/v1",
+        apiKey: env.TOGETHER_AI_API_KEY ?? null,
+      })
+    );
+    this.model = modelPreference || env.TOGETHER_AI_MODEL_PREF;
+    this.maxTokens = env.TOGETHER_AI_MAX_TOKENS
+      ? toValidNumber(env.TOGETHER_AI_MAX_TOKENS, null)
       : null;
     this.limits = {
       history: this.promptWindowLimit() * 0.15,

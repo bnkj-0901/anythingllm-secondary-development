@@ -1,5 +1,6 @@
 import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
+const tenantQuery = () => `?tenantId=${encodeURIComponent(new URLSearchParams(window.location.search).get("tenantId") || "")}`;
 
 const OutlookAgent = {
   /**
@@ -17,7 +18,7 @@ const OutlookAgent = {
     clientSecret,
     authType,
   }) => {
-    return await fetch(`${API_BASE}/admin/agent-skills/outlook/auth-url`, {
+    return await fetch(`${API_BASE}/admin/agent-skills/outlook/auth-url${tenantQuery()}`, {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({ clientId, tenantId, clientSecret, authType }),
@@ -34,7 +35,7 @@ const OutlookAgent = {
    * @returns {Promise<{success: boolean, isConfigured?: boolean, hasCredentials?: boolean, isAuthenticated?: boolean, tokenExpiry?: number, config?: {clientId: string, tenantId: string, clientSecret: string}, error?: string}>}
    */
   getStatus: async () => {
-    return await fetch(`${API_BASE}/admin/agent-skills/outlook/status`, {
+    return await fetch(`${API_BASE}/admin/agent-skills/outlook/status${tenantQuery()}`, {
       method: "GET",
       headers: baseHeaders(),
     })
@@ -50,7 +51,7 @@ const OutlookAgent = {
    * @returns {Promise<{success: boolean, error?: string}>}
    */
   revokeAccess: async () => {
-    return await fetch(`${API_BASE}/admin/agent-skills/outlook/revoke`, {
+    return await fetch(`${API_BASE}/admin/agent-skills/outlook/revoke${tenantQuery()}`, {
       method: "POST",
       headers: baseHeaders(),
     })

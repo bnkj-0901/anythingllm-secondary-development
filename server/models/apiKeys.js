@@ -9,7 +9,7 @@ const ApiKey = {
     return uuidAPIKey.create().apiKey;
   },
 
-  create: async function (createdByUserId = null, name = null) {
+  create: async function (createdByUserId, name, { tenantId, userId } = {}) {
     try {
       const normalizedName =
         typeof name === "string" && name.trim().length > 0 ? name.trim() : null;
@@ -17,7 +17,9 @@ const ApiKey = {
         data: {
           name: normalizedName,
           secret: this.makeSecret(),
-          createdBy: createdByUserId,
+          createdBy: createdByUserId == null ? null : String(createdByUserId),
+          tenantId,
+          userId,
         },
       });
 
@@ -73,12 +75,19 @@ const ApiKey = {
 
   whereWithUser: async function (clause = {}, limit) {
     try {
-      const { User } = require("./user");
       const apiKeys = await this.where(clause, limit);
 
       for (const apiKey of apiKeys) {
         if (!apiKey.createdBy) continue;
-        const user = await User.get({ id: apiKey.createdBy });
+        const user =
+          (/^[1-9]\d*$/.test(apiKey.createdBy) && await prisma.users.findUnique({
+            where: { id: Number(apiKey.createdBy) },
+            select: { id: true, username: true, role: true },
+          })) ||
+          (await prisma.ep_platform_accounts.findUnique({
+            where: { id: apiKey.createdBy },
+            select: { id: true, username: true },
+          }));
         if (!user) continue;
 
         apiKey.createdBy = {

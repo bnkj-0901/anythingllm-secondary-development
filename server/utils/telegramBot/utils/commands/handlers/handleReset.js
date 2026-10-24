@@ -1,32 +1,12 @@
-const { Workspace } = require("../../../../../models/workspace");
-const { WorkspaceThread } = require("../../../../../models/workspaceThread");
-const { WorkspaceChats } = require("../../../../../models/workspaceChats");
-
-/**
- * /reset - Clears LLM chat history context.
- * @param {import("../index").BotContext} ctx
- * @param {number} chatId
- */
+const { Chat } = require("../../../../../models/workspaceChats");
 async function handleReset(ctx, chatId) {
+  const user = await ctx.identity(chatId);
   const state = ctx.getState(chatId);
-  const workspace = await Workspace.get({ slug: state.workspaceSlug });
-  if (!workspace) return;
-
-  const thread = state.threadSlug
-    ? await WorkspaceThread.get({ slug: state.threadSlug })
-    : null;
-
-  await WorkspaceChats.markThreadHistoryInvalidV2({
-    workspaceId: workspace.id,
-    user_id: null,
-    thread_id: thread?.id || null,
-    api_session_id: null,
-  });
-
+  if (state.threadSlug)
+    await Chat.markThreadHistoryInvalid(user, state.threadSlug);
   await ctx.bot.sendMessage(
     chatId,
-    "Chat history has been cleared for the LLM. Previous messages still appear above but won't be used as context."
+    "Previous messages remain visible but will not be used as model context."
   );
 }
-
 module.exports = { handleReset };

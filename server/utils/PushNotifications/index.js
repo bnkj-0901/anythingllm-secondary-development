@@ -1,8 +1,8 @@
 const webpush = require("web-push");
 const fs = require("fs");
 const path = require("path");
-const { User } = require("../../models/user");
-const { SystemSettings } = require("../../models/systemSettings");
+const prisma = require("../prisma");
+const { refreshContext, fail } = require("../../enterprise/auth");
 const { safeJsonParse } = require("../http");
 
 /**
@@ -75,10 +75,6 @@ class PushNotifications {
       : path.resolve(process.env.STORAGE_DIR, "push-notifications");
   }
 
-  get primarySubscriptionPath() {
-    return path.resolve(this.storagePath, `primary-subscription.json`);
-  }
-
   get existingVapidKeys() {
     // Already loaded and binded to the instance
     if (this.#vapidKeys.publicKey && this.#vapidKeys.privateKey)
@@ -103,85 +99,102 @@ class PushNotifications {
 
   /**
    * Load the subscriptions for the push notification service.
-   * In single user mode, the subscription is stored in the primary-subscription.json file.
-   * In multi user mode, the subscriptions are stored in the database so we grab them from there
-   * and store them in the #subscriptions map for reference later.
+   * Subscriptions retain the original per-user database field. Only active
+   * enterprise users are loaded; sending checks that identity again.
    * @returns {Promise<void>}
    */
   async loadSubscriptions() {
-    const isMultiUserMode = await SystemSettings.isMultiUserMode();
-    if (isMultiUserMode) {
-      const users = await User._where({
+    const users = await prisma.users.findMany({
+      where: {
+        status: "active",
+        tenant: { status: "active" },
         web_push_subscription_config: { not: null },
-      });
-      for (const user of users) {
-        const subscription = safeJsonParse(
-          user.web_push_subscription_config,
-          null
-        );
-        if (subscription) this.#subscriptions.set(user.id, subscription);
-      }
-      this.#log(`Loaded ${this.#subscriptions.size} existing subscriptions.`);
-      return;
+      },
+    });
+    this.#subscriptions.clear();
+    for (const user of users) {
+      const subscription = safeJsonParse(
+        user.web_push_subscription_config,
+        null
+      );
+      if (subscription) this.#subscriptions.set(user.id, subscription);
     }
-
-    this.#log("Loading single user mode subscriptions...");
-    if (!fs.existsSync(this.primarySubscriptionPath)) return;
-    const subscription = JSON.parse(
-      fs.readFileSync(this.primarySubscriptionPath, "utf8")
-    );
-    if (subscription) this.#subscriptions.set("primary", subscription);
-    this.#log(`Loaded primary user's existing subscription.`);
+    this.#log(`Loaded ${this.#subscriptions.size} existing subscriptions.`);
   }
 
   /**
    * Register a new subscription for a user.
-   * In single user mode, the userId is mapped to "primary"
-   * In multi user mode, the userId is the user's id in the database
-   *
-   * @param {Object|null} user - The user to register the subscription for.
+   * @param {Object} ctx - The authenticated enterprise user.
    * @param {Object} subscription - The subscription to register.
    * @returns {Promise<PushNotifications>}
    */
-  async registerSubscription(user = null, subscription) {
-    let userId = user?.id || "primary";
-    this.#subscriptions.set(userId, subscription);
-
-    // If this was a real user, write the subscription to the database
-    if (!!user) {
-      await User._update(user.id, {
-        web_push_subscription_config: JSON.stringify(subscription),
-      });
-      this.#log(`Registered or updated subscription for user - ${user.id}`);
-    } else {
-      if (!fs.existsSync(this.storagePath))
-        fs.mkdirSync(this.storagePath, { recursive: true });
-      fs.writeFileSync(
-        this.primarySubscriptionPath,
-        JSON.stringify(subscription, null, 2)
-      );
-      this.#log(`Registered or updated primary user's subscription.`);
-    }
+  async registerSubscription(ctx, subscription) {
+    const current = await refreshContext(ctx);
+    if (current.identity !== "tenant")
+      throw fail(400, "请通过企业用户账户订阅通知");
+    if (
+      typeof subscription?.endpoint !== "string" ||
+      !subscription.endpoint.startsWith("https://") ||
+      typeof subscription.keys?.auth !== "string" ||
+      typeof subscription.keys?.p256dh !== "string" ||
+      JSON.stringify(subscription).length > 16384
+    )
+      throw fail(400, "通知订阅格式无效");
+    const updated = await prisma.users.updateMany({
+      where: {
+        id: current.userId,
+        tenantId: current.tenantId,
+        status: "active",
+        authVersion: current.authVersion,
+        tenant: { status: "active" },
+      },
+      data: { web_push_subscription_config: JSON.stringify(subscription) },
+    });
+    if (!updated.count) throw fail(401, "账号或租户已停用，请重新登录");
+    this.#subscriptions.set(current.userId, subscription);
+    this.#log(
+      `Registered or updated subscription for user - ${current.userId}`
+    );
     return this;
   }
 
   /**
-   * Send a push notification to all subscribed clients.
+   * Send a notification to one currently active enterprise user.
    * @param {Object} options - The options for the notification.
-   * @param {"primary"|number} [options.to] - The subscription to send the notification to. "all" sends to all subscriptions, "primary" sends to the primary user (single user mode only), a number sends subscription to specific user
+   * @param {number} options.to - The execution user's ID.
+   * @param {string} options.tenantId - The task's tenant.
    * @param {PushNotificationPayload} [options.payload] - The payload to send to the clients.
    * @returns {Promise<void>}
    */
-  sendNotification({ to = "primary", payload = {} } = {}) {
-    if (this.#subscriptions.size === 0)
-      return this.#log(".sendNotification() - No subscriptions found");
-    if (!this.#subscriptions.has(to))
-      return this.#log(
-        `.sendNotification() - Subscription for user ${to} not found`
-      );
+  async sendNotification({ to, tenantId, payload = {} } = {}) {
+    if (
+      !Number.isInteger(to) ||
+      to < 1 ||
+      typeof tenantId !== "string" ||
+      !tenantId
+    )
+      return;
+    const user = await prisma.users.findFirst({
+      where: {
+        id: to,
+        tenantId,
+        status: "active",
+        tenant: { status: "active" },
+      },
+    });
+    const subscription = safeJsonParse(
+      user?.web_push_subscription_config,
+      null
+    );
+    if (!subscription) {
+      this.#subscriptions.delete(to);
+      return;
+    }
+    const service = this.pushService;
+    if (!service) return;
     this.#log(`.sendNotification() - Sending notification to user ${to}`);
-    return this.pushService
-      .sendNotification(this.#subscriptions.get(to), JSON.stringify(payload))
+    return service
+      .sendNotification(subscription, JSON.stringify(payload))
       .then((res) => {
         this.#log(
           `.sendNotification() - Delivered (status: ${res.statusCode})`
@@ -195,7 +208,7 @@ class PushNotifications {
   /**
    * Setup the push notification service.
    * This will generate new VAPID keys if they don't exist and save them to the storage path.
-   * It will also load the subscriptions from the database or the primary-subscription.json file.
+   * It also loads active enterprise users' subscriptions from the database.
    * @returns {Promise<void>}
    */
   static async setupPushNotificationService() {

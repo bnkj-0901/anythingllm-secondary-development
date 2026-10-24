@@ -11,6 +11,7 @@ i18next
     fallbackLng: "en",
     debug: import.meta.env.DEV,
     defaultNS,
+    ns: ["common", "enterprise"],
     resources,
     lowerCaseLng: true,
     interpolation: {

@@ -45,7 +45,7 @@ export default function ChatRow({ chat, onDelete }) {
             rel="noreferrer"
             className="text-white flex items-center hover:underline"
           >
-            {chat.embed_config.workspace.name}
+            {chat.embed_config.library.name}
           </a>
         </td>
         <td

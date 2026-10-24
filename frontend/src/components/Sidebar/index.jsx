@@ -15,12 +15,44 @@ import { useSidebarToggle, ToggleSidebarButton } from "./SidebarToggle";
 import SearchBox from "./SearchBox";
 import { Tooltip } from "react-tooltip";
 import { createPortal } from "react-dom";
+import { TenantNavigation, TenantFooter } from "./TenantNavigation";
 
-export default function Sidebar() {
+export default function Sidebar(props) {
+  if (!props.session) return <WorkspaceSidebar />;
+  return (
+    <>
+      {props.open && (
+        <button
+          type="button"
+          aria-label="关闭菜单"
+          onClick={props.close}
+          className="fixed inset-0 z-40 bg-theme-bg-secondary bg-opacity-75 md:hidden"
+        />
+      )}
+      <WorkspaceSidebar
+        navigation={<TenantNavigation {...props} />}
+        footer={<TenantFooter {...props} />}
+        toggleEnabled={props.active === "chat"}
+        open={props.open}
+        onHome={() => props.navigate(props.allowed[0])}
+      />
+    </>
+  );
+}
+
+function WorkspaceSidebar({
+  navigation,
+  footer,
+  toggleEnabled,
+  open = false,
+  onHome,
+}) {
   const { user } = useUser();
   const { logo } = useLogo();
   const sidebarRef = useRef(null);
-  const { showSidebar, setShowSidebar, canToggleSidebar } = useSidebarToggle();
+  const { showSidebar, setShowSidebar, canToggleSidebar } = useSidebarToggle({
+    enabled: toggleEnabled,
+  });
   const {
     showing: showingNewWsModal,
     showModal: showNewWsModal,
@@ -31,10 +63,10 @@ export default function Sidebar() {
     <>
       <div
         style={{
-          width: showSidebar ? "292px" : "0px",
+          width: showSidebar || open ? "292px" : "0px",
           paddingLeft: showSidebar ? "0px" : "16px",
         }}
-        className="relative transition-all duration-500"
+        className={`${open ? "fixed inset-y-0 left-0 z-50 bg-theme-bg-container" : "hidden"} md:block md:relative h-full shrink-0 transition-all duration-500`}
       >
         {canToggleSidebar && (
           <ToggleSidebarButton
@@ -45,7 +77,18 @@ export default function Sidebar() {
         <div className="overflow-hidden h-full">
           <div className="flex shrink-0 w-full justify-center my-[18px]">
             <div className="flex w-[250px] min-w-[250px]">
-              <Link to={paths.home()} aria-label="Home">
+              <Link
+                to={paths.home()}
+                aria-label="Home"
+                onClick={
+                  onHome
+                    ? (event) => {
+                        event.preventDefault();
+                        onHome();
+                      }
+                    : undefined
+                }
+              >
                 <img
                   src={logo}
                   alt="Logo"
@@ -62,12 +105,19 @@ export default function Sidebar() {
               <div className="flex-grow flex flex-col min-w-[235px] min-h-0">
                 <div className="relative h-[calc(100%-60px)] flex flex-col w-full justify-between pt-[10px] overflow-y-scroll no-scroll">
                   <div className="flex flex-col gap-y-[14px]">
-                    <SearchBox user={user} showNewWsModal={showNewWsModal} />
-                    <ActiveWorkspaces />
+                    {navigation ?? (
+                      <>
+                        <SearchBox
+                          user={user}
+                          showNewWsModal={showNewWsModal}
+                        />
+                        <ActiveWorkspaces />
+                      </>
+                    )}
                   </div>
                 </div>
                 <div className="absolute bottom-0 left-0 right-0 pb-3 rounded-b-[16px] bg-theme-bg-sidebar light:bg-slate-200 bg-opacity-80 backdrop-filter backdrop-blur-md z-10">
-                  <Footer />
+                  {footer ?? <Footer />}
                 </div>
               </div>
             </div>

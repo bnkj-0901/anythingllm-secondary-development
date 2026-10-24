@@ -1,14 +1,10 @@
 const crypto = require("crypto");
 const fs = require("fs");
 const path = require("path");
-const keyPath =
-  process.env.NODE_ENV === "development"
-    ? path.resolve(__dirname, `../../../server/storage/comkey`)
-    : path.resolve(
-        process.env.STORAGE_DIR ??
-          path.resolve(__dirname, `../../../server/storage`),
-        `comkey`
-      );
+const keyPath = path.resolve(
+  process.env.STORAGE_DIR || path.resolve(__dirname, "../../../server/storage"),
+  "comkey"
+);
 
 class CommunicationKey {
   #pubKeyName = "ipc-pub.pem";

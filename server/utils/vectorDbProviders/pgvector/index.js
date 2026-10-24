@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const pgsql = require("pg");
 const { toChunks, getEmbeddingEngineSelection } = require("../../helpers");
 const { TextSplitter } = require("../../TextSplitter");
@@ -15,6 +16,11 @@ const { VectorDatabase } = require("../base");
 */
 
 class PGVector extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, this, this);
+  }
+
   constructor() {
     super();
   }
@@ -46,7 +52,7 @@ class PGVector extends VectorDatabase {
    * @returns {string}
    */
   static tableName() {
-    return process.env.PGVECTOR_TABLE_NAME || "anythingllm_vectors";
+    return env.PGVECTOR_TABLE_NAME || "anythingllm_vectors";
   }
 
   /**
@@ -55,11 +61,11 @@ class PGVector extends VectorDatabase {
    * @returns {string | null}
    */
   static connectionString() {
-    return process.env.PGVECTOR_CONNECTION_STRING;
+    return env.PGVECTOR_CONNECTION_STRING;
   }
 
   createTableSql(dimensions) {
-    return `CREATE TABLE IF NOT EXISTS "${PGVector.tableName()}" (id UUID PRIMARY KEY, namespace TEXT, embedding vector(${Number(dimensions)}), metadata JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`;
+    return `CREATE TABLE IF NOT EXISTS "${PGVector.tableName()}" (id UUID PRIMARY KEY, namespace TEXT, embedding vector${dimensions === null ? "" : `(${Number(dimensions)})`}, metadata JSONB, created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP)`;
   }
 
   /**

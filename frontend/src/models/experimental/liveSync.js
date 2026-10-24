@@ -34,12 +34,11 @@ const LiveDocumentSync = {
       });
   },
 
-  // Should be in Workspaces but is here for now while in preview
-  setWatchStatusForDocument: async function (slug, docPath, watchStatus) {
-    return fetch(`${API_BASE}/workspace/${slug}/update-watch-status`, {
+  setWatchStatusForDocument: async function (documentId, watchStatus, userId) {
+    return fetch(`${API_BASE}/documents/${documentId}/update-watch-status`, {
       method: "POST",
       headers: baseHeaders(),
-      body: JSON.stringify({ docPath, watchStatus }),
+      body: JSON.stringify({ watchStatus, ...(userId ? { userId } : {}) }),
     })
       .then((res) => {
         if (!res.ok) {

@@ -196,6 +196,20 @@ class BackgroundService {
     }
   }
 
+  async syncDocumentSyncJob(enabled) {
+    this.documentSyncEnabled = enabled;
+    if (!this.bree) return;
+    const job = this.#documentSyncJobs[0];
+    const registered = this.bree.config.jobs.some((item) => item.name === job.name);
+    if (enabled && !registered) {
+      await this.bree.add(job);
+      await this.bree.start(job.name);
+    } else if (!enabled && registered) {
+      await this.bree.stop(job.name);
+      await this.bree.remove(job.name);
+    }
+  }
+
   onError(error, _workerMetadata) {
     this.logger.error(`${error.message}`, {
       service: "bg-worker",
@@ -273,10 +287,6 @@ class BackgroundService {
    */
   async #bootScheduledJobs() {
     const { ScheduledJob } = require("../../models/scheduledJob");
-    const { SystemSettings } = require("../../models/systemSettings");
-
-    // Scheduled jobs are only available in single-user mode.
-    if (await SystemSettings.isMultiUserMode()) return;
 
     const enabledJobs = await ScheduledJob.allEnabled();
 
@@ -387,21 +397,22 @@ class BackgroundService {
    *
    * @param {number} jobId - scheduled_jobs.id
    * @returns {Promise<object|null>} the created run row, or null if skipped
-   *   because a run is already in flight for this job or the instance is in
-   *   multi-user mode.
+   *   because a run is already in flight or its execution user is unavailable.
    */
   async enqueueScheduledJob(jobId) {
     const { ScheduledJobRun } = require("../../models/scheduledJobRun");
-    const { SystemSettings } = require("../../models/systemSettings");
     const version = this.#scheduledJobVersions.get(jobId) || 0;
     const stale = () =>
       version !== (this.#scheduledJobVersions.get(jobId) || 0);
 
-    // Timers registered before the switch to multi-user mode stop here.
-    if (await SystemSettings.isMultiUserMode()) {
-      this.removeScheduledJob(jobId);
-      return null;
-    }
+    const { ScheduledJob } = require("../../models/scheduledJob");
+    const { context } = require("../../enterprise/auth");
+    const job = await ScheduledJob.get({ id: Number(jobId) });
+    if (!job) return null;
+    try {
+      const identity = await context(job.userId);
+      if (identity.tenantId !== job.tenantId) return null;
+    } catch { return null; }
     if (stale()) return null;
 
     const run = await ScheduledJobRun.start(jobId);

@@ -16,7 +16,7 @@ const MessageActionsContext = createContext(null);
  * Instead of each message registering its own window listener (O(n) listeners),
  * this provider registers just 2 listeners total and dispatches to messages via context.
  */
-export function MessageActionsProvider({ children }) {
+export function MessageActionsProvider({ children, deleteChat }) {
   const [editingMessage, setEditingMessage] = useState(null);
   const [deletedMessages, setDeletedMessages] = useState(new Set());
 
@@ -73,7 +73,7 @@ export function MessageActionsProvider({ children }) {
 
   return (
     <MessageActionsContext.Provider
-      value={{ editingMessage, isEditing, isDeleted, clearEditing }}
+      value={{ editingMessage, isEditing, isDeleted, clearEditing, deleteChat }}
     >
       {children}
     </MessageActionsContext.Provider>

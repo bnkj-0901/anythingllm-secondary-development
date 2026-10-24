@@ -1,205 +1,68 @@
-const { Workspace } = require("../../../models/workspace");
-const { WorkspaceChats } = require("../../../models/workspaceChats");
-const { WorkspaceThread } = require("../../../models/workspaceThread");
-const { ApiChatHandler } = require("../../../utils/chats/apiChatHandler");
-const { reqBody } = require("../../../utils/http");
-const prisma = require("../../../utils/prisma");
-const { getModelTag } = require("../../utils");
+const { ChatThread } = require("../../../models/workspaceThread");
+const { Chat } = require("../../../models/workspaceChats");
+const { executeChat } = require("../../../enterprise/rag");
 const { MobileDevice } = require("../../../models/mobileDevice");
-
-/**
- *
- * @param {import("express").Request} request
- * @param {import("express").Response} response
- * @returns
- */
-async function handleMobileCommand(request, response) {
-  const { command } = request.params;
-  const user = response.locals.user ?? null;
-  const body = reqBody(request);
-
-  if (command === "workspaces") {
-    const workspaces = user
-      ? await Workspace.whereWithUser(user, {})
-      : await Workspace.where({});
-    for (const workspace of workspaces) {
-      const [threadCount, chatCount] = await Promise.all([
-        prisma.workspace_threads.count({
-          where: {
-            workspace_id: workspace.id,
-            ...(user ? { user_id: user.id } : {}),
-          },
-        }),
-        prisma.workspace_chats.count({
-          where: {
-            workspaceId: workspace.id,
-            thread_id: { not: null }, // the app only imports chats that belong to a thread
-            include: true,
-            ...(user ? { user_id: user.id } : {}),
-          },
-        }),
-      ]);
-      workspace.threadCount = threadCount;
-      workspace.chatCount = chatCount;
-      workspace.platform = MobileDevice.platform;
-    }
-    return response.status(200).json({ workspaces });
+const { fail } = require("../../../enterprise/auth");
+async function handleMobileCommand(req, res) {
+  const { command } = req.params;
+  const ctx = req.ep;
+  const body = req.body || {};
+  if (command === "conversations")
+    return res.json({ threads: await ChatThread.where(ctx) });
+  if (command === "conversation-content") {
+    const thread = await ChatThread.get(ctx, { id: body.conversationId });
+    if (!thread) throw fail(404, "Conversation not found");
+    return res.json({ thread, chats: await Chat.forThread(ctx, thread.id) });
   }
-
-  if (command === "workspace-content") {
-    const workspace = user
-      ? await Workspace.getWithUser(user, { slug: String(body.workspaceSlug) })
-      : await Workspace.get({ slug: String(body.workspaceSlug) });
-
-    if (!workspace)
-      return response.status(400).json({ error: "Workspace not found" });
-    const threads = [
-      {
-        id: 0,
-        name: "Default Thread",
-        slug: "default-thread",
-        workspace_id: workspace.id,
-        createdAt: new Date(),
-        lastUpdatedAt: new Date(),
-      },
-      ...(await prisma.workspace_threads.findMany({
-        where: {
-          workspace_id: workspace.id,
-          ...(user ? { user_id: user.id } : {}),
-        },
-      })),
-    ];
-    const chats = (
-      await prisma.workspace_chats.findMany({
-        where: {
-          workspaceId: workspace.id,
-          include: true,
-          ...(user ? { user_id: user.id } : {}),
-        },
-      })
-    ).map((chat) => ({
-      ...chat,
-      // Create a dummy thread_id for the default thread so the chats can be mapped correctly.
-      ...(chat.thread_id === null ? { thread_id: 0 } : {}),
-      createdAt: chat.createdAt.toISOString(),
-      lastUpdatedAt: chat.lastUpdatedAt.toISOString(),
-    }));
-    return response.status(200).json({ threads, chats });
-  }
-
-  // Get the model for this workspace (workspace -> system)
   if (command === "model-tag") {
-    const { workspaceSlug } = body;
-    const workspace = user
-      ? await Workspace.getWithUser(user, { slug: String(workspaceSlug) })
-      : await Workspace.get({ slug: String(workspaceSlug) });
-
-    if (!workspace)
-      return response.status(400).json({ error: "Workspace not found" });
-    if (workspace.chatModel)
-      return response.status(200).json({ model: workspace.chatModel });
-    else return response.status(200).json({ model: getModelTag() });
+    const connection =
+      await require("../../../enterprise/providers").resolveConnection(
+        ctx,
+        "chat"
+      );
+    return res.json({ model: connection.config.model || "default" });
   }
-
+  if (command === "new-thread") return res.json(await ChatThread.new(ctx));
   if (command === "reset-chat") {
-    const { workspaceSlug, threadSlug } = body;
-    const workspace = user
-      ? await Workspace.getWithUser(user, { slug: String(workspaceSlug) })
-      : await Workspace.get({ slug: String(workspaceSlug) });
-
-    if (!workspace)
-      return response.status(400).json({ error: "Workspace not found" });
-    // No threadSlug is the default thread (threadId null) - older mobile clients rely on that.
-    // A threadSlug that does not resolve is rejected so a stale slug never resets the default thread.
-    let threadId = null;
-    if (threadSlug) {
-      const thread = await prisma.workspace_threads.findFirst({
-        where: {
-          workspace_id: workspace.id,
-          slug: String(threadSlug),
-          ...(user ? { user_id: user.id } : {}),
-        },
-      });
-      if (!thread)
-        return response.status(404).json({ error: "Thread not found" });
-      threadId = thread.id;
-    }
-
-    await WorkspaceChats.markThreadHistoryInvalidV2({
-      workspaceId: workspace.id,
-      ...(user ? { user_id: user.id } : {}),
-      thread_id: threadId, // null here is the default thread.
-    });
-    return response.status(200).json({ success: true });
+    const thread = await ChatThread.get(ctx, { id: body.conversationId });
+    if (!thread) throw fail(404, "Conversation not found");
+    await Chat.markThreadHistoryInvalid(ctx, thread.id);
+    return res.json({ success: true });
   }
-
-  if (command === "new-thread") {
-    const { workspaceSlug } = body;
-    const workspace = user
-      ? await Workspace.getWithUser(user, { slug: String(workspaceSlug) })
-      : await Workspace.get({ slug: String(workspaceSlug) });
-
-    if (!workspace)
-      return response.status(400).json({ error: "Workspace not found" });
-    const { thread } = await WorkspaceThread.new(workspace, user?.id);
-    return response.status(200).json({ thread });
-  }
-
   if (command === "stream-chat") {
-    const { workspaceSlug = null, threadSlug = null, message } = body;
-    if (!workspaceSlug)
-      return response.status(400).json({ error: "Workspace ID is required" });
-    else if (!message)
-      return response.status(400).json({ error: "Message is required" });
-
-    const workspace = user
-      ? await Workspace.getWithUser(user, { slug: String(workspaceSlug) })
-      : await Workspace.get({ slug: String(workspaceSlug) });
-
-    if (!workspace)
-      return response.status(400).json({ error: "Workspace not found" });
-    const thread = threadSlug
-      ? await prisma.workspace_threads.findFirst({
-          where: {
-            workspace_id: workspace.id,
-            slug: String(threadSlug),
-            ...(user ? { user_id: user.id } : {}),
-          },
-        })
-      : null;
-    // Same contract as reset-chat: no threadSlug is the default thread, an unknown one is rejected.
-    if (threadSlug && !thread)
-      return response.status(404).json({ error: "Thread not found" });
-
-    response.setHeader("Cache-Control", "no-cache");
-    response.setHeader("Content-Type", "text/event-stream");
-    response.setHeader("Access-Control-Allow-Origin", "*");
-    response.setHeader("Connection", "keep-alive");
-    response.flushHeaders();
-    await ApiChatHandler.streamChat({
-      response,
-      workspace,
-      thread,
-      message,
-      mode: "chat",
-      user: user,
-      sessionId: null,
-      attachments: [],
-      reset: false,
+    const thread = await ChatThread.get(ctx, { id: body.conversationId });
+    if (!thread) throw fail(404, "Conversation not found");
+    res.set({
+      "Cache-Control": "no-cache",
+      "Content-Type": "text/event-stream",
+      Connection: "keep-alive",
     });
-    return response.end();
+    res.flushHeaders();
+    const controller = new AbortController();
+    const close = () => {
+      if (!res.writableEnded) controller.abort();
+    };
+    res.on("close", close);
+    try {
+      await executeChat({
+        ctx,
+        threadId: thread.id,
+        prompt: body.message,
+        signal: controller.signal,
+        onEvent: (event) => res.write(`data: ${JSON.stringify(event)}\n\n`),
+      });
+      return res.end();
+    } finally {
+      res.off("close", close);
+    }
   }
-
   if (command === "unregister-device") {
-    if (!response.locals.device)
-      return response.status(200).json({ success: true });
-    await MobileDevice.delete(response.locals.device.id);
-    return response.status(200).json({ success: true });
+    await MobileDevice.delete(res.locals.device.id);
+    return res.json({ success: true });
   }
-
-  return response.status(400).json({ error: "Invalid command" });
+  throw fail(
+    400,
+    "Invalid command; this SaaS client uses personal conversations instead of Workspaces"
+  );
 }
-
-module.exports = {
-  handleMobileCommand,
-};
+module.exports = { handleMobileCommand };

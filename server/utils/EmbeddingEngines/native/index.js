@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const path = require("path");
 const fs = require("fs");
 const { toChunks, reportEmbeddingProgress } = require("../../helpers");
@@ -66,8 +67,7 @@ class NativeEmbedder {
    * @returns {string}
    */
   static _getEmbeddingModel() {
-    const envModel =
-      process.env.EMBEDDING_MODEL_PREF ?? NativeEmbedder.defaultModel;
+    const envModel = env.EMBEDDING_MODEL_PREF ?? NativeEmbedder.defaultModel;
     if (NativeEmbedder.supportedModels?.[envModel]) return envModel;
     return NativeEmbedder.defaultModel;
   }
@@ -101,8 +101,7 @@ class NativeEmbedder {
    * @returns {string}
    */
   getEmbeddingModel() {
-    const envModel =
-      process.env.EMBEDDING_MODEL_PREF ?? NativeEmbedder.defaultModel;
+    const envModel = env.EMBEDDING_MODEL_PREF ?? NativeEmbedder.defaultModel;
     if (NativeEmbedder.supportedModels?.[envModel]) return envModel;
     return NativeEmbedder.defaultModel;
   }

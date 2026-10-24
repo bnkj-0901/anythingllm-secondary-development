@@ -1,4 +1,8 @@
 const {
+  env,
+  sdkOptions,
+} = require("../../../enterprise/ai/connection-context");
+const {
   toChunks,
   maximumChunkLength,
   reportEmbeddingProgress,
@@ -7,16 +11,18 @@ const {
 class LiteLLMEmbedder {
   constructor() {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.LITE_LLM_BASE_PATH)
+    if (!env.LITE_LLM_BASE_PATH)
       throw new Error(
         "LiteLLM must have a valid base path to use for the api."
       );
-    this.basePath = process.env.LITE_LLM_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.LITE_LLM_API_KEY ?? null,
-    });
-    this.model = process.env.EMBEDDING_MODEL_PREF || "text-embedding-ada-002";
+    this.basePath = env.LITE_LLM_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.LITE_LLM_API_KEY ?? null,
+      })
+    );
+    this.model = env.EMBEDDING_MODEL_PREF || "text-embedding-ada-002";
 
     // Limit of how many strings we can process in a single pass to stay with resource or network limits
     this.maxConcurrentChunks = 500;

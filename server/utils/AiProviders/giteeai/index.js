@@ -1,3 +1,9 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const fs = require("fs");
 const path = require("path");
 const { safeJsonParse, toValidNumber } = require("../../http");
@@ -13,24 +19,26 @@ const {
 const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "giteeai")
     : path.resolve(__dirname, `../../../storage/models/giteeai`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 class GiteeAILLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.GITEE_AI_API_KEY)
-      throw new Error("No Gitee AI API key was set.");
+    if (!env.GITEE_AI_API_KEY) throw new Error("No Gitee AI API key was set.");
     const { OpenAI: OpenAIApi } = require("openai");
 
     this.className = "GiteeAILLM";
-    this.openai = new OpenAIApi({
-      apiKey: process.env.GITEE_AI_API_KEY,
-      baseURL: "https://ai.gitee.com/v1",
-    });
-    this.model = modelPreference || process.env.GITEE_AI_MODEL_PREF || "";
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        apiKey: env.GITEE_AI_API_KEY,
+        baseURL: "https://ai.gitee.com/v1",
+      })
+    );
+    this.model = modelPreference || env.GITEE_AI_MODEL_PREF || "";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -39,10 +47,10 @@ class GiteeAILLM {
 
     this.embedder = embedder ?? new NativeEmbedder();
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
     this.log("Initialized with model:", this.model);
   }
 
@@ -76,7 +84,7 @@ class GiteeAILLM {
 
   static promptWindowLimit(model) {
     return (
-      toValidNumber(process.env.GITEE_AI_MODEL_TOKEN_LIMIT) ||
+      toValidNumber(env.GITEE_AI_MODEL_TOKEN_LIMIT) ||
       LEGACY_MODEL_MAP.giteeai[model] ||
       8192
     );
@@ -84,7 +92,7 @@ class GiteeAILLM {
 
   promptWindowLimit() {
     return (
-      toValidNumber(process.env.GITEE_AI_MODEL_TOKEN_LIMIT) ||
+      toValidNumber(env.GITEE_AI_MODEL_TOKEN_LIMIT) ||
       LEGACY_MODEL_MAP.giteeai[this.model] ||
       8192
     );
@@ -207,11 +215,11 @@ class GiteeAILLM {
 async function giteeAiModels() {
   const url = new URL("https://ai.gitee.com/v1/models");
   url.searchParams.set("type", "text2text");
-  return await fetch(url.toString(), {
+  return await scopedFetch(url.toString(), {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.GITEE_AI_API_KEY}`,
+      Authorization: `Bearer ${env.GITEE_AI_API_KEY}`,
     },
   })
     .then((res) => res.json())
@@ -227,17 +235,17 @@ async function giteeAiModels() {
           })
       );
       // Cache all response information
-      if (!fs.existsSync(cacheFolder))
-        fs.mkdirSync(cacheFolder, { recursive: true });
+      if (!fs.existsSync(cacheFolder()))
+        fs.mkdirSync(cacheFolder(), { recursive: true });
       fs.writeFileSync(
-        path.resolve(cacheFolder, "models.json"),
+        path.resolve(cacheFolder(), "models.json"),
         JSON.stringify(validModels),
         {
           encoding: "utf-8",
         }
       );
       fs.writeFileSync(
-        path.resolve(cacheFolder, ".cached_at"),
+        path.resolve(cacheFolder(), ".cached_at"),
         String(Number(new Date())),
         {
           encoding: "utf-8",

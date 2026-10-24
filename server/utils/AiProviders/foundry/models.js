@@ -1,3 +1,7 @@
+const {
+  env,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { parseFoundryBasePath } = require("./index.js");
 const FoundryCatalog = require("./catalog.js");
 
@@ -67,7 +71,7 @@ class FoundryModels {
    * @returns {Promise<Response>}
    */
   static #fetchWithTimeout(url, options = {}) {
-    return fetch(url, {
+    return scopedFetch(url, {
       ...options,
       signal: AbortSignal.timeout(this.REQUEST_TIMEOUT_MS),
     });
@@ -105,7 +109,7 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<string[]>}
    */
-  static async loadedModels(basePath = process.env.FOUNDRY_BASE_PATH) {
+  static async loadedModels(basePath = env.FOUNDRY_BASE_PATH) {
     const origin = this.#originOf(basePath);
     if (!origin) return [];
     try {
@@ -126,14 +130,14 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
-  static async loadModel(modelId, basePath = process.env.FOUNDRY_BASE_PATH) {
+  static async loadModel(modelId, basePath = env.FOUNDRY_BASE_PATH) {
     const origin = this.#originOf(basePath);
     if (!origin || !modelId)
       return { success: false, error: "No Foundry service or model was set." };
 
     try {
       // Loading pulls a multi-GB model into memory, well past the probe timeout.
-      const response = await fetch(
+      const response = await scopedFetch(
         `${origin}/models/load/${encodeURIComponent(modelId)}`,
         { signal: AbortSignal.timeout(this.LOAD_TIMEOUT_MS) }
       );
@@ -153,7 +157,7 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<boolean>}
    */
-  static async unloadModel(modelId, basePath = process.env.FOUNDRY_BASE_PATH) {
+  static async unloadModel(modelId, basePath = env.FOUNDRY_BASE_PATH) {
     const origin = this.#originOf(basePath);
     if (!origin || !modelId) return false;
     try {
@@ -246,7 +250,7 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<{source: FoundrySource, canManage: boolean}>}
    */
-  static async resolveSource(basePath = process.env.FOUNDRY_BASE_PATH) {
+  static async resolveSource(basePath = env.FOUNDRY_BASE_PATH) {
     const origin = this.#originOf(basePath);
     if (!origin) return { source: "openai", canManage: false };
 
@@ -264,7 +268,7 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<{models: FoundryUiModel[], source: FoundrySource, canManage: boolean}>}
    */
-  static async listModels(basePath = process.env.FOUNDRY_BASE_PATH) {
+  static async listModels(basePath = env.FOUNDRY_BASE_PATH) {
     const { source, canManage } = await this.resolveSource(basePath);
     const origin = this.#originOf(basePath);
     if (source !== "rest") return await this.#listFromOpenAiSurface(basePath);
@@ -345,10 +349,7 @@ class FoundryModels {
    * @param {string} basePath
    * @returns {Promise<ModelCapabilities>}
    */
-  static async getModelCapabilities(
-    modelId,
-    basePath = process.env.FOUNDRY_BASE_PATH
-  ) {
+  static async getModelCapabilities(modelId, basePath = env.FOUNDRY_BASE_PATH) {
     if (!modelId) return this.UNKNOWN_CAPABILITIES;
     try {
       const entry = await this.#catalogEntry(modelId);

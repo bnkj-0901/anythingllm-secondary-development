@@ -10,7 +10,7 @@ import { useTranslation } from "react-i18next";
 import { t } from "i18next";
 import PasswordInput from "@/components/lib/PasswordInput";
 
-const RecoveryForm = ({ onSubmit, setShowRecoveryForm }) => {
+export const RecoveryForm = ({ onSubmit, setShowRecoveryForm }) => {
   const [username, setUsername] = useState("");
   const [recoveryCodeInputs, setRecoveryCodeInputs] = useState(
     Array(2).fill("")
@@ -103,7 +103,7 @@ const RecoveryForm = ({ onSubmit, setShowRecoveryForm }) => {
   );
 };
 
-const ResetPasswordForm = ({ onSubmit }) => {
+export const ResetPasswordForm = ({ onSubmit }) => {
   const [newPassword, setNewPassword] = useState("");
   const [confirmPassword, setConfirmPassword] = useState("");
 

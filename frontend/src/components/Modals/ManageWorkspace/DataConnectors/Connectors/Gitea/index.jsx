@@ -8,7 +8,7 @@ import { Info, Warning } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
 
 const DEFAULT_BRANCHES = ["main", "master"];
-export default function GiteaOptions() {
+export default function GiteaOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [repo, setRepo] = useState(null);
@@ -31,7 +31,9 @@ export default function GiteaOptions() {
         "info",
         { clear: true, autoClose: false }
       );
-      const { data, error } = await System.dataConnectors.gitea.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.gitea.collect
+      )({
         repo: form.get("repo"),
         accessToken: form.get("accessToken"),
         branch: form.get("branch"),
@@ -40,6 +42,12 @@ export default function GiteaOptions() {
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

@@ -1,33 +1,19 @@
-const { handleWorkspaceCreate } = require("./handleWorkspaceCreate");
-const { handleWorkspacePagination } = require("./handleWorkspacePagination");
-const { handleWorkspaceSelect } = require("./handleWorkspaceSelect");
-const { handleThreadPagination } = require("./handleThreadPagination");
-const { handleThreadSelect } = require("./handleThreadSelect");
-const { handleBackWorkspaces } = require("./handleBackWorkspaces");
-const { handleModelPagination } = require("./handleModelPagination");
-const { handleModelCancel } = require("./handleModelCancel");
-const { handleModelSelect } = require("./handleModelSelect");
 const { handleSourceSelect } = require("./handleSourceSelect");
 const { handleSourcePagination } = require("./handleSourcePagination");
 const { handleBackSources } = require("./handleBackSources");
 const { handleToolApproval } = require("./handleToolApproval");
+const { handleThreadSelect } = require("./handleThreadSelect");
+const { handleThreadPagination } = require("./handleThreadPagination");
 
 const ExactCallbackHandlers = {
-  "ws-create": handleWorkspaceCreate,
-  "back:workspaces": handleBackWorkspaces,
-  "mdl:cancel": handleModelCancel,
   "src:back": handleBackSources,
   "src:close": handleSourceSelect,
 };
 
 const PrefixCallbackHandlers = [
-  { prefix: "tool:", handler: handleToolApproval },
-  { prefix: "wspg:", handler: handleWorkspacePagination },
-  { prefix: "ws:", handler: handleWorkspaceSelect },
-  { prefix: "thpg:", handler: handleThreadPagination },
   { prefix: "th:", handler: handleThreadSelect },
-  { prefix: "mdlpg:", handler: handleModelPagination },
-  { prefix: "mdl:", handler: handleModelSelect },
+  { prefix: "thpg:", handler: handleThreadPagination },
+  { prefix: "tool:", handler: handleToolApproval },
   { prefix: "srcpg:", handler: handleSourcePagination },
   { prefix: "src:", handler: handleSourceSelect },
 ];

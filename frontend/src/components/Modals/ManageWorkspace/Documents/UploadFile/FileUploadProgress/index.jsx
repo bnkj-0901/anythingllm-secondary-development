@@ -15,10 +15,14 @@ function FileUploadProgressComponent({
   folderName = null,
   relativePath = null,
   onSettled,
+  externalState = null,
 }) {
   const [timerMs, setTimerMs] = useState(10);
-  const [status, setStatus] = useState("pending");
-  const [error, setError] = useState("");
+  const [internalStatus, setStatus] = useState("pending");
+  const status = externalState?.status || internalStatus;
+  const [internalError, setError] = useState("");
+  const error = externalState?.reason || internalError;
+  rejected = externalState?.status === "rejected" || rejected;
   const [isFadingOut, setIsFadingOut] = useState(false);
 
   // Every timer this row starts, so nothing fires after unmount.
@@ -76,8 +80,15 @@ function FileUploadProgressComponent({
         }, 5000)
       );
     }
-    !!file && !rejected && uploadFile();
+    !!file && !rejected && !externalState && uploadFile();
   }, []);
+
+  useEffect(() => {
+    if (externalState?.status !== "uploading") return;
+    const start = Date.now();
+    const timer = setInterval(() => setTimerMs(Date.now() - start), 100);
+    return () => clearInterval(timer);
+  }, [externalState?.status]);
 
   if (rejected) {
     return (

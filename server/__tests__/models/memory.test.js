@@ -2,648 +2,364 @@ jest.mock("../../utils/prisma", () => ({
   memories: {
     findMany: jest.fn(),
     findFirst: jest.fn(),
-    findUnique: jest.fn(),
     create: jest.fn(),
-    update: jest.fn(),
-    delete: jest.fn(),
     count: jest.fn(),
     updateMany: jest.fn(),
+    deleteMany: jest.fn(),
   },
-  $transaction: jest.fn(),
 }));
 
 const prisma = require("../../utils/prisma");
 const { Memory } = require("../../models/memory");
+const ctx = { identity: "tenant", tenantId: "company-a", userId: "user-a" };
+const scope = { tenantId: ctx.tenantId, userId: ctx.userId };
 
 beforeEach(() => {
-  jest.clearAllMocks();
+  jest.resetAllMocks();
+  prisma.memories.findMany.mockResolvedValue([]);
+  prisma.memories.findFirst.mockResolvedValue(null);
+  prisma.memories.count.mockResolvedValue(0);
+  prisma.memories.create.mockImplementation(async ({ data }) => ({
+    id: 1,
+    ...data,
+  }));
+  prisma.memories.updateMany.mockResolvedValue({ count: 1 });
+  prisma.memories.deleteMany.mockResolvedValue({ count: 1 });
 });
 
-// ---------------------------------------------------------------------------
-// Validations
-// ---------------------------------------------------------------------------
+// Workspace/global destinations are now one personal memory resource. Their
+// original content, capacity, deduplication and CRUD assertions remain here;
+// promote/demote and single-user migration have no destination in this model.
 describe("Memory.validations", () => {
-  describe("id", () => {
-    it("accepts an integer", () => {
-      expect(Memory.validations.id(1)).toBe(1);
-    });
-
-    it("coerces a numeric string", () => {
-      expect(Memory.validations.id("5")).toBe(5);
-    });
-
-    it("throws on non-integer", () => {
-      expect(() => Memory.validations.id("abc")).toThrow();
-      expect(() => Memory.validations.id(1.5)).toThrow();
-    });
+  it.each([1, "5"])("accepts a valid integer memory ID: %p", (id) => {
+    expect(Memory.validations.id(id)).toBe(Number(id));
   });
 
-  describe("userId", () => {
-    it("returns null for null or undefined", () => {
-      expect(Memory.validations.userId(null)).toBeNull();
-      expect(Memory.validations.userId(undefined)).toBeNull();
-      expect(Memory.validations.userId()).toBeNull();
-    });
+  it.each(["abc", 1.5, 0, -1, null, undefined, Number.MAX_SAFE_INTEGER + 1])(
+    "rejects an invalid memory ID before a database query: %p",
+    (id) => {
+      expect(() => Memory.get(ctx, id)).toThrow("Memory not found.");
+      expect(prisma.memories.findFirst).not.toHaveBeenCalled();
+    }
+  );
 
-    it("coerces a valid value to int", () => {
-      expect(Memory.validations.userId(3)).toBe(3);
-      expect(Memory.validations.userId("7")).toBe(7);
-    });
+  it("accepts content and trims leading and trailing whitespace", () => {
+    expect(Memory.validations.content("hello")).toBe("hello");
+    expect(Memory.validations.content("  hello  ")).toBe("hello");
   });
 
-  describe("workspaceId", () => {
-    it("returns null for null or undefined", () => {
-      expect(Memory.validations.workspaceId(null)).toBeNull();
-      expect(Memory.validations.workspaceId(undefined)).toBeNull();
-      expect(Memory.validations.workspaceId()).toBeNull();
-    });
+  it.each(["", "   ", 123, null, undefined])(
+    "rejects empty or non-string content: %p",
+    (content) =>
+      expect(() => Memory.validations.content(content)).toThrow(
+        "Content must be a non-empty string"
+      )
+  );
 
-    it("coerces a valid value to int", () => {
-      expect(Memory.validations.workspaceId(10)).toBe(10);
-    });
-  });
-
-  describe("scope", () => {
-    it("accepts valid scopes", () => {
-      expect(Memory.validations.scope("workspace")).toBe("workspace");
-      expect(Memory.validations.scope("global")).toBe("global");
-    });
-
-    it("defaults to workspace", () => {
-      expect(Memory.validations.scope()).toBe("workspace");
-    });
-
-    it("throws on invalid scope", () => {
-      expect(() => Memory.validations.scope("invalid")).toThrow();
-    });
-  });
-
-  describe("content", () => {
-    it("accepts a non-empty string", () => {
-      expect(Memory.validations.content("hello")).toBe("hello");
-    });
-
-    it("throws on empty or whitespace-only string", () => {
-      expect(() => Memory.validations.content("")).toThrow();
-      expect(() => Memory.validations.content("   ")).toThrow();
-    });
-
-    it("throws on non-string", () => {
-      expect(() => Memory.validations.content(123)).toThrow();
-      expect(() => Memory.validations.content(null)).toThrow();
-    });
-  });
+  it.each([
+    undefined,
+    {},
+    { ...ctx, userId: null },
+    { ...ctx, userId: 1 },
+    { ...ctx, tenantId: "" },
+    { ...ctx, identity: "platform" },
+  ])(
+    "requires a tenant user identity instead of numeric/nullable Workspace ownership: %p",
+    async (identity) => {
+      expect(() => Memory.forUser(identity)).toThrow();
+      await expect(
+        Memory.create(identity, { content: "private fact" })
+      ).rejects.toMatchObject({ status: 401 });
+      expect(prisma.memories.findMany).not.toHaveBeenCalled();
+      expect(prisma.memories.count).not.toHaveBeenCalled();
+    }
+  );
 });
 
-// ---------------------------------------------------------------------------
-// forUserWorkspace
-// ---------------------------------------------------------------------------
-describe("Memory.forUserWorkspace", () => {
-  it("queries workspace-scoped memories ordered by createdAt desc", async () => {
-    const fakeMemories = [{ id: 2 }, { id: 1 }];
-    prisma.memories.findMany.mockResolvedValue(fakeMemories);
-
-    const result = await Memory.forUserWorkspace(1, 5);
-    expect(result).toEqual(fakeMemories);
+describe("Memory.forUser", () => {
+  it("lists the current user's long-term memories newest first", async () => {
+    const memories = [{ id: 2 }, { id: 1 }];
+    prisma.memories.findMany.mockResolvedValue(memories);
+    expect(await Memory.forUser(ctx)).toEqual(memories);
     expect(prisma.memories.findMany).toHaveBeenCalledWith({
-      where: { userId: 1, workspaceId: 5, scope: "workspace" },
+      where: scope,
       orderBy: { createdAt: "desc" },
     });
   });
 
-  it("returns empty array on error", async () => {
+  it("propagates query failures to the endpoint instead of reporting an empty successful list", async () => {
     prisma.memories.findMany.mockRejectedValue(new Error("db error"));
-    const result = await Memory.forUserWorkspace(1, 5);
-    expect(result).toEqual([]);
+    await expect(Memory.forUser(ctx)).rejects.toThrow("db error");
   });
 });
 
-// ---------------------------------------------------------------------------
-// globalForUser
-// ---------------------------------------------------------------------------
-describe("Memory.globalForUser", () => {
-  it("queries global-scoped memories", async () => {
-    const fakeMemories = [{ id: 1, scope: "global" }];
-    prisma.memories.findMany.mockResolvedValue(fakeMemories);
-
-    const result = await Memory.globalForUser(1);
-    expect(result).toEqual(fakeMemories);
-    expect(prisma.memories.findMany).toHaveBeenCalledWith({
-      where: { userId: 1, scope: "global" },
-      orderBy: { createdAt: "desc" },
-    });
-  });
-
-  it("returns empty array on error", async () => {
-    prisma.memories.findMany.mockRejectedValue(new Error("db error"));
-    const result = await Memory.globalForUser(1);
-    expect(result).toEqual([]);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// create
-// ---------------------------------------------------------------------------
 describe("Memory.create", () => {
-  it("creates a workspace memory when under limit", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-    const fakeMemory = { id: 1, content: "test", scope: "workspace" };
-    prisma.memories.create.mockResolvedValue(fakeMemory);
-
-    const { memory, message } = await Memory.create({
-      userId: 1,
-      workspaceId: 2,
-      scope: "workspace",
-      content: "test",
+  it("creates a memory below the original personal limit and ignores payload ownership", async () => {
+    const result = await Memory.create(ctx, {
+      content: "  test  ",
+      tenantId: "company-b",
+      userId: "someone-else",
     });
-
-    expect(memory).toEqual(fakeMemory);
-    expect(message).toBeNull();
-  });
-
-  it("rejects when workspace limit is reached", async () => {
-    prisma.memories.count.mockResolvedValue(Memory.WORKSPACE_LIMIT);
-
-    const { memory, message } = await Memory.create({
-      userId: 1,
-      workspaceId: 2,
-      scope: "workspace",
-      content: "test",
-    });
-
-    expect(memory).toBeNull();
-    expect(message).toMatch(/limit/i);
-    expect(prisma.memories.create).not.toHaveBeenCalled();
-  });
-
-  it("rejects when global limit is reached", async () => {
-    prisma.memories.count.mockResolvedValue(Memory.GLOBAL_LIMIT);
-
-    const { memory, message } = await Memory.create({
-      userId: 1,
-      scope: "global",
-      content: "test",
-    });
-
-    expect(memory).toBeNull();
-    expect(message).toMatch(/limit/i);
-    expect(prisma.memories.create).not.toHaveBeenCalled();
-  });
-
-  it("returns error message on prisma failure", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-    prisma.memories.create.mockRejectedValue(new Error("unique constraint"));
-
-    const { memory, message } = await Memory.create({
-      userId: 1,
-      workspaceId: 2,
-      content: "test",
-    });
-
-    expect(memory).toBeNull();
-    expect(message).toBe("unique constraint");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// update
-// ---------------------------------------------------------------------------
-describe("Memory.update", () => {
-  it("updates content by id", async () => {
-    const updated = { id: 1, content: "new content" };
-    prisma.memories.update.mockResolvedValue(updated);
-
-    const { memory, message } = await Memory.update(1, {
-      content: "new content",
-    });
-
-    expect(memory).toEqual(updated);
-    expect(message).toBeNull();
-    expect(prisma.memories.update).toHaveBeenCalledWith({
-      where: { id: 1 },
-      data: expect.objectContaining({ content: "new content" }),
-    });
-  });
-
-  it("returns error on invalid content", async () => {
-    const { memory, message } = await Memory.update(1, { content: "" });
-    expect(memory).toBeNull();
-    expect(message).toBeTruthy();
-  });
-
-  it("returns error on prisma failure", async () => {
-    prisma.memories.update.mockRejectedValue(new Error("not found"));
-    const { memory, message } = await Memory.update(999, {
-      content: "test",
-    });
-    expect(memory).toBeNull();
-    expect(message).toBe("not found");
-  });
-});
-
-// ---------------------------------------------------------------------------
-// delete
-// ---------------------------------------------------------------------------
-describe("Memory.delete", () => {
-  it("returns true on success", async () => {
-    prisma.memories.delete.mockResolvedValue({});
-    expect(await Memory.delete(1)).toBe(true);
-    expect(prisma.memories.delete).toHaveBeenCalledWith({ where: { id: 1 } });
-  });
-
-  it("returns false on error", async () => {
-    prisma.memories.delete.mockRejectedValue(new Error("not found"));
-    expect(await Memory.delete(999)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// promoteToGlobal
-// ---------------------------------------------------------------------------
-describe("Memory.promoteToGlobal", () => {
-  it("promotes a workspace memory to global", async () => {
-    const existing = { id: 1, userId: 1, scope: "workspace" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-    prisma.memories.count.mockResolvedValue(0);
-    const promoted = { ...existing, scope: "global", workspaceId: null };
-    prisma.memories.update.mockResolvedValue(promoted);
-
-    const { memory, message } = await Memory.promoteToGlobal(1);
-    expect(memory.scope).toBe("global");
-    expect(message).toBeNull();
-  });
-
-  it("returns message if memory not found", async () => {
-    prisma.memories.findUnique.mockResolvedValue(null);
-    const { memory, message } = await Memory.promoteToGlobal(999);
-    expect(memory).toBeNull();
-    expect(message).toMatch(/not found/i);
-  });
-
-  it("returns existing memory if already global", async () => {
-    const existing = { id: 1, scope: "global" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-
-    const { memory, message } = await Memory.promoteToGlobal(1);
-    expect(memory).toEqual(existing);
-    expect(message).toMatch(/already global/i);
-  });
-
-  it("rejects when global limit is reached", async () => {
-    const existing = { id: 1, userId: 1, scope: "workspace" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-    prisma.memories.count.mockResolvedValue(Memory.GLOBAL_LIMIT);
-
-    const { memory, message } = await Memory.promoteToGlobal(1);
-    expect(memory).toBeNull();
-    expect(message).toMatch(/limit/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// demoteToWorkspace
-// ---------------------------------------------------------------------------
-describe("Memory.demoteToWorkspace", () => {
-  it("demotes a global memory to workspace scope", async () => {
-    const existing = { id: 1, userId: 1, scope: "global" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-    prisma.memories.count.mockResolvedValue(0);
-    const demoted = { ...existing, scope: "workspace", workspaceId: 5 };
-    prisma.memories.update.mockResolvedValue(demoted);
-
-    const { memory, message } = await Memory.demoteToWorkspace(1, 5);
-    expect(memory.scope).toBe("workspace");
-    expect(memory.workspaceId).toBe(5);
-    expect(message).toBeNull();
-  });
-
-  it("returns message if memory not found", async () => {
-    prisma.memories.findUnique.mockResolvedValue(null);
-    const { memory, message } = await Memory.demoteToWorkspace(999, 5);
-    expect(memory).toBeNull();
-    expect(message).toMatch(/not found/i);
-  });
-
-  it("returns existing memory if already workspace-scoped", async () => {
-    const existing = { id: 1, scope: "workspace" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-
-    const { memory, message } = await Memory.demoteToWorkspace(1, 5);
-    expect(memory).toEqual(existing);
-    expect(message).toMatch(/already workspace/i);
-  });
-
-  it("rejects when workspace limit is reached", async () => {
-    const existing = { id: 1, userId: 1, scope: "global" };
-    prisma.memories.findUnique.mockResolvedValue(existing);
-    prisma.memories.count.mockResolvedValue(Memory.WORKSPACE_LIMIT);
-
-    const { memory, message } = await Memory.demoteToWorkspace(1, 5);
-    expect(memory).toBeNull();
-    expect(message).toMatch(/limit/i);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// updateLastUsed
-// ---------------------------------------------------------------------------
-describe("Memory.updateLastUsed", () => {
-  it("updates lastUsedAt for the given ids", async () => {
-    prisma.memories.updateMany.mockResolvedValue({ count: 2 });
-    await Memory.updateLastUsed([1, 2]);
-    expect(prisma.memories.updateMany).toHaveBeenCalledWith({
-      where: { id: { in: [1, 2] } },
-      data: expect.objectContaining({ lastUsedAt: expect.any(Date) }),
-    });
-  });
-
-  it("no-ops on empty array", async () => {
-    await Memory.updateLastUsed([]);
-    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
-  });
-
-  it("no-ops when called with no arguments", async () => {
-    await Memory.updateLastUsed();
-    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
-  });
-});
-
-// ---------------------------------------------------------------------------
-// countForScope
-// ---------------------------------------------------------------------------
-describe("Memory.countForScope", () => {
-  it("counts workspace-scoped memories with workspaceId", async () => {
-    prisma.memories.count.mockResolvedValue(5);
-    const count = await Memory.countForScope(1, 2, "workspace");
-    expect(count).toBe(5);
-    expect(prisma.memories.count).toHaveBeenCalledWith({
-      where: { userId: 1, scope: "workspace", workspaceId: 2 },
-    });
-  });
-
-  it("counts global-scoped memories without workspaceId", async () => {
-    prisma.memories.count.mockResolvedValue(3);
-    const count = await Memory.countForScope(1, null, "global");
-    expect(count).toBe(3);
-    expect(prisma.memories.count).toHaveBeenCalledWith({
-      where: { userId: 1, scope: "global" },
-    });
-  });
-
-  it("returns 0 on error", async () => {
-    prisma.memories.count.mockRejectedValue(new Error("db error"));
-    const count = await Memory.countForScope(1, 2, "workspace");
-    expect(count).toBe(0);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// replaceWorkspaceMemories
-// ---------------------------------------------------------------------------
-describe("Memory.replaceWorkspaceMemories", () => {
-  let tx;
-  beforeEach(() => {
-    tx = {
-      memories: {
-        deleteMany: jest.fn().mockResolvedValue({}),
-        create: jest.fn().mockResolvedValue({}),
-      },
-    };
-    prisma.$transaction.mockImplementation((cb) => cb(tx));
-  });
-
-  it("deletes old memories and creates new ones in a transaction", async () => {
-    const result = await Memory.replaceWorkspaceMemories(1, 2, [
-      "fact one",
-      "fact two",
-    ]);
-    expect(result).toBe(true);
-    expect(tx.memories.deleteMany).toHaveBeenCalledWith({
-      where: { userId: 1, workspaceId: 2, scope: "workspace" },
-    });
-    expect(tx.memories.create).toHaveBeenCalledTimes(2);
-  });
-
-  it("caps at WORKSPACE_LIMIT", async () => {
-    const tooMany = Array.from({ length: 30 }, (_, i) => `fact ${i}`);
-    await Memory.replaceWorkspaceMemories(1, 2, tooMany);
-    expect(tx.memories.create).toHaveBeenCalledTimes(Memory.WORKSPACE_LIMIT);
-  });
-
-  it("filters out non-string and empty entries", async () => {
-    await Memory.replaceWorkspaceMemories(1, 2, [
-      "valid",
-      "",
-      "   ",
-      123,
-      null,
-      "also valid",
-    ]);
-    expect(tx.memories.create).toHaveBeenCalledTimes(2);
-  });
-
-  it("returns false on transaction error", async () => {
-    prisma.$transaction.mockRejectedValue(new Error("tx failed"));
-    const result = await Memory.replaceWorkspaceMemories(1, 2, ["fact"]);
-    expect(result).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// applyExtractedMemories
-// ---------------------------------------------------------------------------
-describe("Memory.applyExtractedMemories", () => {
-  let tx;
-  beforeEach(() => {
-    tx = {
-      memories: {
-        create: jest.fn().mockResolvedValue({}),
-        updateMany: jest.fn().mockResolvedValue({ count: 1 }),
-      },
-    };
-    prisma.$transaction.mockImplementation((cb) => cb(tx));
-  });
-
-  it("creates workspace and global memories", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "ws fact", scope: "WORKSPACE", action: "create" },
-      { content: "global fact", scope: "GLOBAL", action: "create" },
-    ], Memory.GLOBAL_LIMIT);
-
     expect(result).toEqual({
-      workspaceCount: 1,
-      globalCount: 1,
-      updatedCount: 0,
+      memory: { id: 1, ...scope, content: "test" },
+      message: null,
     });
-    expect(tx.memories.create).toHaveBeenCalledTimes(2);
+    expect(prisma.memories.count).toHaveBeenCalledWith({ where: scope });
+    expect(prisma.memories.create).toHaveBeenCalledWith({
+      data: { ...scope, content: "test" },
+    });
   });
 
-  it("scopes updates to the current user's workspace or global memories", async () => {
-    prisma.memories.count.mockResolvedValue(0);
+  it("rejects creation at the personal limit", async () => {
+    prisma.memories.count.mockResolvedValue(Memory.PERSONAL_LIMIT);
+    const result = await Memory.create(ctx, { content: "test" });
+    expect(result.memory).toBeNull();
+    expect(result.message).toMatch(/limit/i);
+    expect(prisma.memories.create).not.toHaveBeenCalled();
+  });
 
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "revised", scope: "WORKSPACE", action: "update", updateId: 10 },
-    ], Memory.GLOBAL_LIMIT);
+  it("rejects empty content before writing", async () => {
+    await expect(Memory.create(ctx, { content: " " })).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(prisma.memories.create).not.toHaveBeenCalled();
+  });
 
+  it("propagates database errors to the endpoint", async () => {
+    prisma.memories.create.mockRejectedValue(new Error("unique constraint"));
+    await expect(Memory.create(ctx, { content: "test" })).rejects.toThrow(
+      "unique constraint"
+    );
+  });
+});
+
+describe("Memory.update", () => {
+  it("updates content by ID only inside the current user's tenant", async () => {
+    const updated = { id: 1, ...scope, content: "new content" };
+    prisma.memories.findFirst.mockResolvedValue(updated);
+    expect(await Memory.update(ctx, 1, { content: "new content" })).toEqual({
+      memory: updated,
+      message: null,
+    });
+    expect(prisma.memories.updateMany).toHaveBeenCalledWith({
+      where: { id: 1, ...scope },
+      data: { content: "new content", updatedAt: expect.any(Date) },
+    });
+    expect(prisma.memories.findFirst).toHaveBeenCalledWith({
+      where: { id: 1, ...scope },
+    });
+  });
+
+  it("does not return a memory that belongs to another user or tenant", async () => {
+    prisma.memories.updateMany.mockResolvedValue({ count: 0 });
+    expect(await Memory.update(ctx, 999, { content: "attempt" })).toEqual({
+      memory: null,
+      message: "Memory not found.",
+    });
+    expect(prisma.memories.findFirst).not.toHaveBeenCalled();
+  });
+
+  it("rejects invalid content before modifying the database", async () => {
+    await expect(Memory.update(ctx, 1, { content: "" })).rejects.toMatchObject({
+      status: 400,
+    });
+    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("propagates database failures", async () => {
+    prisma.memories.updateMany.mockRejectedValue(new Error("db error"));
+    await expect(Memory.update(ctx, 1, { content: "test" })).rejects.toThrow(
+      "db error"
+    );
+  });
+});
+
+describe("Memory.delete", () => {
+  it("returns true only after deleting an owned memory", async () => {
+    expect(await Memory.delete(ctx, 1)).toBe(true);
+    expect(prisma.memories.deleteMany).toHaveBeenCalledWith({
+      where: { id: 1, ...scope },
+    });
+  });
+
+  it("returns false for a missing or inaccessible memory", async () => {
+    prisma.memories.deleteMany.mockResolvedValue({ count: 0 });
+    expect(await Memory.delete(ctx, 999)).toBe(false);
+  });
+
+  it("propagates database failures", async () => {
+    prisma.memories.deleteMany.mockRejectedValue(new Error("db error"));
+    await expect(Memory.delete(ctx, 1)).rejects.toThrow("db error");
+  });
+});
+
+describe("Memory.updateLastUsed", () => {
+  it("updates the original last-use timestamps within the current owner scope", async () => {
+    await Memory.updateLastUsed(ctx, [1, "2"]);
+    expect(prisma.memories.updateMany).toHaveBeenCalledWith({
+      where: { ...scope, id: { in: [1, 2] } },
+      data: { lastUsedAt: expect.any(Date) },
+    });
+  });
+
+  it("does nothing for an empty or omitted list", async () => {
+    await Memory.updateLastUsed(ctx, []);
+    await Memory.updateLastUsed(ctx);
+    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
+  });
+
+  it("does not write a partially valid set of IDs", async () => {
+    await expect(
+      Memory.updateLastUsed(ctx, [1, "invalid"])
+    ).rejects.toMatchObject({ status: 404 });
+    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
+  });
+});
+
+describe("Memory.applyExtractedMemories", () => {
+  it("stores Observer/Reflector results in the same personal resource", async () => {
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "first fact", action: "create" },
+      { content: "second fact", action: "create" },
+    ]);
+    expect(result).toEqual({ createdCount: 2, updatedCount: 0 });
+    expect(prisma.memories.create).toHaveBeenCalledTimes(2);
+    expect(prisma.memories.create).toHaveBeenNthCalledWith(1, {
+      data: { ...scope, content: "first fact" },
+    });
+  });
+
+  it("deduplicates normalized content without querying another user's memories", async () => {
+    prisma.memories.findFirst
+      .mockResolvedValueOnce({ id: 1, content: "known fact" })
+      .mockResolvedValueOnce(null);
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "  known fact  ", action: "create" },
+      { content: "new fact", action: "create" },
+    ]);
+    expect(result.createdCount).toBe(1);
+    expect(prisma.memories.findFirst).toHaveBeenNthCalledWith(1, {
+      where: { ...scope, content: "known fact" },
+    });
+    expect(prisma.memories.create).toHaveBeenCalledWith({
+      data: { ...scope, content: "new fact" },
+    });
+  });
+
+  it("deduplicates repeated entries within an extraction batch", async () => {
+    prisma.memories.findFirst
+      .mockResolvedValueOnce(null)
+      .mockResolvedValueOnce({ id: 1, content: "same fact" });
+    expect(
+      await Memory.applyExtractedMemories(ctx, [
+        { content: "same fact", action: "create" },
+        { content: "same fact", action: "create" },
+      ])
+    ).toEqual({ createdCount: 1, updatedCount: 0 });
+    expect(prisma.memories.create).toHaveBeenCalledTimes(1);
+  });
+
+  it("scopes an extracted update to the current tenant user", async () => {
+    prisma.memories.findFirst.mockResolvedValue({
+      id: 10,
+      content: "revised",
+      ...scope,
+    });
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "revised", action: "update", updateId: 10 },
+    ]);
     expect(result.updatedCount).toBe(1);
-    expect(tx.memories.updateMany).toHaveBeenCalledWith({
-      where: {
-        id: 10,
-        userId: 1,
-        OR: [
-          { scope: "workspace", workspaceId: 2 },
-          { scope: "global" },
-        ],
-      },
+    expect(prisma.memories.updateMany).toHaveBeenCalledWith({
+      where: { id: 10, ...scope },
       data: expect.objectContaining({ content: "revised" }),
     });
   });
 
-  it("does not count an update whose id belongs to another user or workspace", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-    tx.memories.updateMany.mockResolvedValue({ count: 0 });
-
-    const result = await Memory.applyExtractedMemories(4, 2, [
-      { content: "attacker replacement", scope: "WORKSPACE", action: "update", updateId: 1 },
-    ], Memory.GLOBAL_LIMIT);
-
+  it("does not count an extracted update when the memory belongs to another owner", async () => {
+    prisma.memories.updateMany.mockResolvedValue({ count: 0 });
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "attacker replacement", action: "update", updateId: 1 },
+    ]);
     expect(result.updatedCount).toBe(0);
-    expect(tx.memories.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ id: 1, userId: 4 }) })
-    );
+    expect(prisma.memories.findFirst).not.toHaveBeenCalled();
   });
 
-  it("scopes updates to unowned memories in single-user mode", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    await Memory.applyExtractedMemories(null, 2, [
-      { content: "revised", scope: "WORKSPACE", action: "update", updateId: 10 },
-    ], Memory.GLOBAL_LIMIT);
-
-    expect(tx.memories.updateMany).toHaveBeenCalledWith(
-      expect.objectContaining({ where: expect.objectContaining({ id: 10, userId: null }) })
-    );
-  });
-
-  it("skips updates without a numeric updateId", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "bad update", scope: "WORKSPACE", action: "update" },
-      { content: "also bad", scope: "WORKSPACE", action: "update", updateId: "abc" },
-    ], Memory.GLOBAL_LIMIT);
-
+  it("skips updates without a safe numeric update ID", async () => {
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "missing", action: "update" },
+      { content: "invalid", action: "update", updateId: "abc" },
+      { content: "fractional", action: "update", updateId: 1.5 },
+    ]);
     expect(result.updatedCount).toBe(0);
-    expect(tx.memories.updateMany).not.toHaveBeenCalled();
+    expect(prisma.memories.updateMany).not.toHaveBeenCalled();
   });
 
-  it("does not create workspace memories past the workspace limit", async () => {
-    prisma.memories.count.mockResolvedValue(Memory.WORKSPACE_LIMIT - 1);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "First fact", scope: "WORKSPACE", action: "create" },
-      { content: "Second fact", scope: "WORKSPACE", action: "create" },
-      { content: "Third fact", scope: "WORKSPACE", action: "create" },
-    ], Memory.GLOBAL_LIMIT);
-
-    expect(tx.memories.create).toHaveBeenCalledTimes(1);
-    expect(result.workspaceCount).toBe(1);
+  it("stops creating at the personal memory limit", async () => {
+    prisma.memories.count
+      .mockResolvedValueOnce(Memory.PERSONAL_LIMIT - 1)
+      .mockResolvedValue(Memory.PERSONAL_LIMIT);
+    const result = await Memory.applyExtractedMemories(ctx, [
+      { content: "First fact", action: "create" },
+      { content: "Second fact", action: "create" },
+      { content: "Third fact", action: "create" },
+    ]);
+    expect(prisma.memories.create).toHaveBeenCalledTimes(1);
+    expect(result.createdCount).toBe(1);
   });
 
-  it("creates zero workspace memories when already at limit", async () => {
-    prisma.memories.count.mockResolvedValue(Memory.WORKSPACE_LIMIT);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "rejected", scope: "WORKSPACE", action: "create" },
-    ], Memory.GLOBAL_LIMIT);
-
-    expect(result.workspaceCount).toBe(0);
+  it("creates no memories when the personal limit is already reached", async () => {
+    prisma.memories.count.mockResolvedValue(Memory.PERSONAL_LIMIT);
+    expect(
+      await Memory.applyExtractedMemories(ctx, [
+        { content: "rejected", action: "create" },
+      ])
+    ).toEqual({ createdCount: 0, updatedCount: 0 });
+    expect(prisma.memories.create).not.toHaveBeenCalled();
   });
 
-  it("respects globalSlots parameter", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
-      { content: "g1", scope: "GLOBAL", action: "create" },
-      { content: "g2", scope: "GLOBAL", action: "create" },
-      { content: "g3", scope: "GLOBAL", action: "create" },
-    ], 1);
-
-    expect(result.globalCount).toBe(1);
-  });
-
-  it("filters out malformed entries", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    const result = await Memory.applyExtractedMemories(1, 2, [
+  it("filters malformed entries without suppressing the remaining valid result", async () => {
+    const result = await Memory.applyExtractedMemories(ctx, [
       null,
-      { content: "", scope: "WORKSPACE", action: "create" },
-      { content: "valid", scope: "INVALID", action: "create" },
-      { content: "also valid", scope: "WORKSPACE", action: "bad" },
-      { scope: "WORKSPACE", action: "create" },
-      { content: "good", scope: "WORKSPACE", action: "create" },
-    ], Memory.GLOBAL_LIMIT);
-
-    expect(result.workspaceCount).toBe(1);
-    expect(tx.memories.create).toHaveBeenCalledTimes(1);
+      { content: "", action: "create" },
+      { content: "   ", action: "create" },
+      { content: 123, action: "create" },
+      { content: "not an operation", action: "unknown" },
+      { action: "create" },
+      { content: "good", action: "create" },
+    ]);
+    expect(result).toEqual({ createdCount: 1, updatedCount: 0 });
+    expect(prisma.memories.create).toHaveBeenCalledTimes(1);
   });
 
-  it("handles non-array input gracefully", async () => {
-    prisma.memories.count.mockResolvedValue(0);
-
-    const result = await Memory.applyExtractedMemories(1, 2, null, 5);
-    expect(result).toEqual({
-      workspaceCount: 0,
-      globalCount: 0,
-      updatedCount: 0,
-    });
-  });
+  it.each([null, undefined, "not an array", {}])(
+    "handles non-array input: %p",
+    async (input) => {
+      expect(await Memory.applyExtractedMemories(ctx, input)).toEqual({
+        createdCount: 0,
+        updatedCount: 0,
+      });
+      expect(prisma.memories.create).not.toHaveBeenCalled();
+      expect(prisma.memories.updateMany).not.toHaveBeenCalled();
+    }
+  );
 });
 
-// ---------------------------------------------------------------------------
-// migrateToMultiUser
-// ---------------------------------------------------------------------------
-describe("Memory.migrateToMultiUser", () => {
-  it("reassigns unowned memories to the admin user", async () => {
-    prisma.memories.updateMany.mockResolvedValue({ count: 3 });
-    const result = await Memory.migrateToMultiUser(1);
-    expect(result).toBe(true);
-    expect(prisma.memories.updateMany).toHaveBeenCalledWith({
-      where: { userId: null },
-      data: { userId: 1 },
-    });
-  });
-
-  it("returns false on error", async () => {
-    prisma.memories.updateMany.mockRejectedValue(new Error("db error"));
-    expect(await Memory.migrateToMultiUser(1)).toBe(false);
-  });
-});
-
-// ---------------------------------------------------------------------------
-// get
-// ---------------------------------------------------------------------------
 describe("Memory.get", () => {
-  it("returns the first matching memory", async () => {
-    const fake = { id: 1, content: "test" };
-    prisma.memories.findFirst.mockResolvedValue(fake);
-
-    const result = await Memory.get({ id: 1 });
-    expect(result).toEqual(fake);
+  it("returns the matching personal memory", async () => {
+    const memory = { id: 1, content: "test", ...scope };
+    prisma.memories.findFirst.mockResolvedValue(memory);
+    expect(await Memory.get(ctx, "1")).toEqual(memory);
     expect(prisma.memories.findFirst).toHaveBeenCalledWith({
-      where: { id: 1 },
+      where: { id: 1, ...scope },
     });
   });
 
-  it("returns null when no match found", async () => {
-    prisma.memories.findFirst.mockResolvedValue(null);
-    expect(await Memory.get({ id: 999 })).toBeNull();
+  it("returns null for a missing or inaccessible memory", async () => {
+    expect(await Memory.get(ctx, 999)).toBeNull();
   });
 
-  it("returns null on error", async () => {
+  it("propagates database failures", async () => {
     prisma.memories.findFirst.mockRejectedValue(new Error("db error"));
-    expect(await Memory.get({ id: 1 })).toBeNull();
+    await expect(Memory.get(ctx, 1)).rejects.toThrow("db error");
   });
 });

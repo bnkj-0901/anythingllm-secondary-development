@@ -1,4 +1,11 @@
 const {
+  scopedCache,
+  inConnectionScope,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
+const {
   writeResponseChunk,
   clientAbortedHandler,
   formatChatHistory,
@@ -18,28 +25,40 @@ const {
 // llmman: https://github.com/llmmanorg/llmman
 class LlmmanLLM {
   /** @see LlmmanLLM.cacheContextWindows */
-  static modelContextWindows = {};
+  static _modelContextWindows = {};
+  static get modelContextWindows() {
+    return scopedCache(this._modelContextWindows);
+  }
+  static set modelContextWindows(value) {
+    if (!inConnectionScope()) this._modelContextWindows = value;
+    else {
+      const cache = scopedCache(this._modelContextWindows);
+      for (const key of Object.keys(cache)) delete cache[key];
+      Object.assign(cache, value);
+    }
+  }
 
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.LLMMAN_BASE_PATH)
-      throw new Error("No llmman Base Path was set.");
+    if (!env.LLMMAN_BASE_PATH) throw new Error("No llmman Base Path was set.");
 
     this.className = "LlmmanLLM";
-    this.authToken = process.env.LLMMAN_AUTH_TOKEN;
-    this.basePath = process.env.LLMMAN_BASE_PATH;
-    this.model = modelPreference || process.env.LLMMAN_MODEL_PREF;
-    this.keepAlive = process.env.LLMMAN_KEEP_ALIVE_TIMEOUT
-      ? Number(process.env.LLMMAN_KEEP_ALIVE_TIMEOUT)
+    this.authToken = env.LLMMAN_AUTH_TOKEN;
+    this.basePath = env.LLMMAN_BASE_PATH;
+    this.model = modelPreference || env.LLMMAN_MODEL_PREF;
+    this.keepAlive = env.LLMMAN_KEEP_ALIVE_TIMEOUT
+      ? Number(env.LLMMAN_KEEP_ALIVE_TIMEOUT)
       : 300; // Default 5-minute timeout for model loading.
 
     const headers = this.authToken
       ? { Authorization: `Bearer ${this.authToken}` }
       : {};
-    this.client = new Ollama({
-      host: this.basePath,
-      headers: headers,
-      fetch: LlmmanLLM.applyLlmmanFetch(),
-    });
+    this.client = new Ollama(
+      sdkOptions({
+        host: this.basePath,
+        headers: headers,
+        fetch: LlmmanLLM.applyLlmmanFetch(),
+      })
+    );
     this.embedder = embedder ?? new NativeEmbedder();
 
     // Lazy load the limits to avoid blocking the main thread on cacheContextWindows
@@ -86,12 +105,14 @@ class LlmmanLLM {
       if (Object.keys(LlmmanLLM.modelContextWindows).length > 0 && !force)
         return;
 
-      const authToken = process.env.LLMMAN_AUTH_TOKEN;
-      const basePath = process.env.LLMMAN_BASE_PATH;
-      const client = new Ollama({
-        host: basePath,
-        headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
-      });
+      const authToken = env.LLMMAN_AUTH_TOKEN;
+      const basePath = env.LLMMAN_BASE_PATH;
+      const client = new Ollama(
+        sdkOptions({
+          host: basePath,
+          headers: authToken ? { Authorization: `Bearer ${authToken}` } : {},
+        })
+      );
 
       const { models } = await client.list().catch(() => ({ models: [] }));
       if (!models.length) return;
@@ -194,21 +215,21 @@ class LlmmanLLM {
    */
   static applyLlmmanFetch() {
     try {
-      if (!("LLMMAN_RESPONSE_TIMEOUT" in process.env)) return fetch;
+      if (!("LLMMAN_RESPONSE_TIMEOUT" in env)) return scopedFetch;
       const { Agent } = require("undici");
       const moment = require("moment");
-      let timeout = process.env.LLMMAN_RESPONSE_TIMEOUT;
+      let timeout = env.LLMMAN_RESPONSE_TIMEOUT;
 
       if (!timeout || isNaN(Number(timeout)) || Number(timeout) <= 5 * 60_000) {
         LlmmanLLM.#slog(
           "Timeout option was not set, is not a number, or is less than 5 minutes in ms - falling back to default",
           { timeout }
         );
-        return fetch;
+        return scopedFetch;
       } else timeout = Number(timeout);
 
       const noTimeoutFetch = (input, init = {}) => {
-        return fetch(input, {
+        return scopedFetch(input, {
           ...init,
           dispatcher: new Agent({ headersTimeout: timeout }),
         });
@@ -222,7 +243,7 @@ class LlmmanLLM {
         "Error applying custom fetch - using default fetch",
         error
       );
-      return fetch;
+      return scopedFetch;
     }
   }
 
@@ -235,18 +256,18 @@ class LlmmanLLM {
       this.#slog(
         "No context windows cached - Context window may be inaccurately reported."
       );
-      return Number(process.env.LLMMAN_MODEL_TOKEN_LIMIT) || 4096;
+      return Number(env.LLMMAN_MODEL_TOKEN_LIMIT) || 4096;
     }
 
     let userDefinedLimit = null;
     const systemDefinedLimit = LlmmanLLM.maxContextWindow(modelName);
 
     if (
-      process.env.LLMMAN_MODEL_TOKEN_LIMIT &&
-      !isNaN(Number(process.env.LLMMAN_MODEL_TOKEN_LIMIT)) &&
-      Number(process.env.LLMMAN_MODEL_TOKEN_LIMIT) > 0
+      env.LLMMAN_MODEL_TOKEN_LIMIT &&
+      !isNaN(Number(env.LLMMAN_MODEL_TOKEN_LIMIT)) &&
+      Number(env.LLMMAN_MODEL_TOKEN_LIMIT) > 0
     )
-      userDefinedLimit = Number(process.env.LLMMAN_MODEL_TOKEN_LIMIT);
+      userDefinedLimit = Number(env.LLMMAN_MODEL_TOKEN_LIMIT);
 
     // The user defined limit is always higher priority than the context window limit, but it cannot be higher than the context window limit
     // so we return the minimum of the two, if there is no user defined limit, we return the system defined limit as-is.

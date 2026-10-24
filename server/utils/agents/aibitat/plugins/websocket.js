@@ -12,14 +12,14 @@ const { ROLES } = require("../../../middleware/multiUserProtected");
  * @param {number|null} userId - User id from the agent invocation.
  * @returns {Promise<boolean>}
  */
-async function userCanToggleTools(userId = null) {
-  const { SystemSettings } = require("../../../../models/systemSettings");
-  if (!(await SystemSettings.isMultiUserMode())) return true;
-  if (!userId) return false;
-
-  const { User } = require("../../../../models/user");
-  const user = await User.get({ id: Number(userId) });
-  return user?.role === ROLES.admin;
+async function userCanToggleTools(ctx) {
+  if (!ctx) return false;
+  try {
+    const current = await require("../../../../enterprise/execution-context").loadExecutionContext(ctx);
+    return current.identity === "platform" || current.role === ROLES.admin;
+  } catch {
+    return false;
+  }
 }
 
 /**
@@ -80,29 +80,25 @@ function isImageCommand(feedback = "") {
  * @returns {Promise<Array>} generated image attachments to carry into the next agent turn
  */
 async function handleImageCommand({ aibitat, socket, message }) {
-  const { generateImage } = require("../../../chats/commands/img");
   const { generatedImageAttachments } = require("../../../files");
-  const { User } = require("../../../../models/user");
   const invocation = aibitat?.handlerProps?.invocation;
-  if (!invocation?.workspace) return [];
-
-  const user = invocation.user_id
-    ? await User.get({ id: invocation.user_id })
-    : null;
+  const ctx = aibitat?.handlerProps?.ctx;
+  if (!ctx || !invocation?.thread_id) return [];
 
   // Show the image-pending card while generating - generateImage only emits
   // this over an HTTP response stream, and there is none mid agent session.
   socket.send(JSON.stringify({ type: "imageGenerationPending" }));
-  const result = await generateImage(
-    invocation.workspace,
-    message,
-    uuidv4(),
-    user,
-    invocation.thread_id ? { id: invocation.thread_id } : null,
-    null,
-    [],
-    aibitat?.abortController?.signal ?? null
-  );
+  let result;
+  try {
+    result = await require("../../../../enterprise/rag").executeChat({
+      ctx,
+      threadId: invocation.thread_id,
+      prompt: message,
+      signal: aibitat?.abortController?.signal,
+    });
+  } catch (error) {
+    result = { error: error.message };
+  }
 
   // generateImage reports aborts and provider failures as an empty
   // textResponse - an empty content card is dropped by the frontend, which
@@ -194,7 +190,7 @@ const websocket = {
           const data = safeJsonParse(message, {});
           if (data?.type !== "agentToolToggle") return false;
 
-          userCanToggleTools(userId).then((authorized) => {
+          userCanToggleTools(aibitat.handlerProps.ctx).then((authorized) => {
             if (!authorized)
               return console.log(
                 chalk.yellow("Ignoring agentToolToggle from a non-admin user.")
@@ -354,13 +350,26 @@ const websocket = {
           return new Promise((resolve) => {
             let timeoutId = null;
             let held = false;
+            const settle = (result) => {
+              delete socket.handleClarificationResponse;
+              clearTimeout(timeoutId);
+              aibitat.emitter.removeListener("abort", onAbort);
+              resolve(result);
+            };
+            const onAbort = () =>
+              settle({
+                skipped: true,
+                timedOut: false,
+                answers: questions.map(() => ({ skipped: true, answer: null })),
+              });
+            aibitat.emitter.once("abort", onAbort);
+            if (aibitat.abortController?.signal.aborted) return onAbort();
 
             const handleTimeout = (ms) => {
-              delete socket.handleClarificationResponse;
               console.log(
                 chalk.yellow(`Clarification request timed out after ${ms}ms`)
               );
-              resolve({
+              settle({
                 skipped: false,
                 timedOut: true,
                 answers: questions.map(() => ({ skipped: true, answer: null })),
@@ -385,11 +394,8 @@ const websocket = {
 
                 if (data?.type !== "clarificationResponse") return;
 
-                delete socket.handleClarificationResponse;
-                clearTimeout(timeoutId);
-
                 if (data.skipped) {
-                  return resolve({
+                  return settle({
                     skipped: true,
                     timedOut: false,
                     answers: questions.map(() => ({
@@ -407,7 +413,7 @@ const websocket = {
                     answer: a.answer ?? null,
                   };
                 });
-                return resolve({
+                return settle({
                   skipped: false,
                   timedOut: false,
                   answers: normalized,
@@ -475,6 +481,16 @@ const websocket = {
 
             return new Promise(function (resolve) {
               let socketTimeout = null;
+              const settle = (result) => {
+                delete socket.handleFeedback;
+                clearTimeout(socketTimeout);
+                aibitat.emitter.removeListener("abort", onAbort);
+                resolve(result);
+              };
+              const onAbort = () =>
+                settle({ feedback: "exit", attachments: [] });
+              aibitat.emitter.once("abort", onAbort);
+              if (aibitat.abortController?.signal.aborted) return onAbort();
               // Images generated via inline /img commands while awaiting feedback
               // are carried into the next real reply so the agent sees them as
               // vision context, mirroring how persisted /img images are re-read
@@ -488,7 +504,7 @@ const websocket = {
                       `Client took too long to respond, chat thread is dead after ${SOCKET_TIMEOUT_MS}ms`
                     )
                   );
-                  resolve({ feedback: "exit", attachments: [] });
+                  settle({ feedback: "exit", attachments: [] });
                   return;
                 }, SOCKET_TIMEOUT_MS);
               };
@@ -511,9 +527,7 @@ const websocket = {
                   return;
                 }
 
-                delete socket.handleFeedback;
-                clearTimeout(socketTimeout);
-                resolve({
+                settle({
                   feedback: data.feedback,
                   attachments: [
                     ...pendingImageAttachments,

@@ -3,7 +3,7 @@
  * @typedef {object} BotContext
  * @property {import('node-telegram-bot-api')} bot - The bot object.
  * @property {object} config - The bot configuration.
- * @property {(chatId: number) => { workspaceSlug: string, threadSlug: string | null }} getState - Get state for a chat.
+ * @property {(chatId: number) => { threadSlug: string | null }} getState - Get personal conversation state.
  * @property {(chatId: number, updates: object) => void} setState - Update state for a chat.
  * @property {(text: string, ...args: any[]) => void} log - Log a message.
  */
@@ -39,16 +39,16 @@ const BOT_COMMANDS = [
   {
     ...BASE_COMMAND,
     command: "switch",
-    description: "Switch workspace or thread",
+    description: "Switch personal conversation",
     initHandler: () => {
-      const { showWorkspaceMenu } = require("./handlers/showWorkspaceMenu");
-      return showWorkspaceMenu;
+      const { showThreadMenu } = require("./handlers/showThreadMenu");
+      return showThreadMenu;
     },
   },
   {
     ...BASE_COMMAND,
     command: "model",
-    description: "Change the LLM model",
+    description: "Show the configured LLM model",
     initHandler: () => {
       const { showModelMenu } = require("./handlers/showModelMenu");
       return showModelMenu;
@@ -76,7 +76,7 @@ const BOT_COMMANDS = [
   {
     ...BASE_COMMAND,
     command: "status",
-    description: "Show current workspace and model",
+    description: "Show current conversation and model",
     initHandler: () => {
       const { handleStatus } = require("./handlers/handleStatus");
       return handleStatus;

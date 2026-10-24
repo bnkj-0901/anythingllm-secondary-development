@@ -1,13 +1,20 @@
 import { API_BASE } from "@/utils/constants";
 import { baseHeaders } from "@/utils/request";
 
+let targetTenantId = "";
+const endpoint = (path) =>
+  `${API_BASE}/telegram/${path}${targetTenantId ? `?tenantId=${encodeURIComponent(targetTenantId)}` : ""}`;
+
 const Telegram = {
+  selectTenant: (id) => {
+    targetTenantId = id || "";
+  },
   /**
    * Get the current Telegram bot configuration.
    * @returns {Promise<{config: object|null, error: string|null}>}
    */
   getConfig: async function () {
-    return await fetch(`${API_BASE}/telegram/config`, {
+    return await fetch(endpoint("config"), {
       headers: baseHeaders(),
     })
       .then((res) => res.json())
@@ -23,13 +30,12 @@ const Telegram = {
    * @param {string} workspaceSlug - The default workspace slug.
    * @returns {Promise<{success: boolean, bot_username: string|null, error: string|null}>}
    */
-  connect: async function (botToken, workspaceSlug) {
-    return await fetch(`${API_BASE}/telegram/connect`, {
+  connect: async function (botToken) {
+    return await fetch(endpoint("connect"), {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({
         bot_token: botToken,
-        default_workspace: workspaceSlug,
       }),
     })
       .then((res) => res.json())
@@ -44,7 +50,7 @@ const Telegram = {
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
   disconnect: async function () {
-    return await fetch(`${API_BASE}/telegram/disconnect`, {
+    return await fetch(endpoint("disconnect"), {
       method: "POST",
       headers: baseHeaders(),
     })
@@ -60,7 +66,7 @@ const Telegram = {
    * @returns {Promise<{active: boolean, bot_username: string|null}>}
    */
   status: async function () {
-    return await fetch(`${API_BASE}/telegram/status`, {
+    return await fetch(endpoint("status"), {
       headers: baseHeaders(),
     })
       .then((res) => res.json())
@@ -75,7 +81,7 @@ const Telegram = {
    * @returns {Promise<{users: Array}>}
    */
   getPendingUsers: async function () {
-    return await fetch(`${API_BASE}/telegram/pending-users`, {
+    return await fetch(endpoint("pending-users"), {
       headers: baseHeaders(),
     })
       .then((res) => res.json())
@@ -90,7 +96,7 @@ const Telegram = {
    * @returns {Promise<{users: Array}>}
    */
   getApprovedUsers: async function () {
-    return await fetch(`${API_BASE}/telegram/approved-users`, {
+    return await fetch(endpoint("approved-users"), {
       headers: baseHeaders(),
     })
       .then((res) => res.json())
@@ -105,11 +111,11 @@ const Telegram = {
    * @param {string} chatId
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
-  approveUser: async function (chatId) {
-    return await fetch(`${API_BASE}/telegram/approve-user`, {
+  approveUser: async function (chatId, code) {
+    return await fetch(endpoint("approve-user"), {
       method: "POST",
       headers: baseHeaders(),
-      body: JSON.stringify({ chatId }),
+      body: JSON.stringify({ chatId, code }),
     })
       .then((res) => res.json())
       .catch((e) => {
@@ -124,7 +130,7 @@ const Telegram = {
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
   denyUser: async function (chatId) {
-    return await fetch(`${API_BASE}/telegram/deny-user`, {
+    return await fetch(endpoint("deny-user"), {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({ chatId }),
@@ -142,7 +148,7 @@ const Telegram = {
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
   updateConfig: async function (updates) {
-    return await fetch(`${API_BASE}/telegram/update-config`, {
+    return await fetch(endpoint("update-config"), {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify(updates),
@@ -160,7 +166,7 @@ const Telegram = {
    * @returns {Promise<{success: boolean, error: string|null}>}
    */
   revokeUser: async function (chatId) {
-    return await fetch(`${API_BASE}/telegram/revoke-user`, {
+    return await fetch(endpoint("revoke-user"), {
       method: "POST",
       headers: baseHeaders(),
       body: JSON.stringify({ chatId }),

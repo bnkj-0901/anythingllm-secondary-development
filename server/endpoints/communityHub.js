@@ -98,6 +98,7 @@ function communityHubEndpoints(app) {
         const { error: applyError } = await CommunityHub.applyItem(item, {
           ...options,
           currentUser: response.locals?.user,
+          currentContext: request.ep,
         });
         if (applyError) throw new Error(applyError);
 

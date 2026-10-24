@@ -1,391 +1,177 @@
 const prisma = require("../utils/prisma");
 const { safeJSONStringify } = require("../utils/helpers/chat/responses");
 
-const WorkspaceChats = {
-  new: async function ({
-    workspaceId,
-    prompt,
-    response = {},
-    user = null,
-    threadId = null,
-    include = true,
-    apiSessionId = null,
-  }) {
-    try {
-      const chat = await prisma.workspace_chats.create({
-        data: {
-          workspaceId,
-          prompt,
-          response: safeJSONStringify(response),
-          user_id: user?.id || null,
-          thread_id: threadId,
-          api_session_id: apiSessionId,
-          include,
-        },
-      });
-      return { chat, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { chat: null, message: error.message };
-    }
-  },
+// Scope is taken from the authenticated identity, never a create/query payload.
+function chatScope(ctx) {
+  if (
+    typeof ctx?.tenantId !== "string" ||
+    !ctx.tenantId ||
+    !Number.isInteger(ctx?.userId) ||
+    ctx.userId < 1 ||
+    ctx.identity === "platform"
+  )
+    throw Object.assign(new Error("请使用当前企业的用户账户访问对话"), {
+      status: 401,
+    });
+  return { tenantId: ctx.tenantId, userId: ctx.userId };
+}
 
-  forWorkspaceByUser: async function (
-    workspaceId = null,
-    userId = null,
-    limit = null,
-    orderBy = null
+const Chat = {
+  new: async function (
+    ctx,
+    { prompt, response = {}, threadId, include = true, apiSessionId = null },
+    db = prisma
   ) {
-    if (!workspaceId || !userId) return [];
-    try {
-      const chats = await prisma.workspace_chats.findMany({
-        where: {
-          workspaceId,
-          user_id: userId,
-          thread_id: null, // this function is now only used for the default thread on workspaces and users
-          api_session_id: null, // do not include api-session chats in the frontend for anyone.
-          include: true,
-        },
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : { orderBy: { id: "asc" } }),
-      });
-      return chats;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    const scope = chatScope(ctx);
+    if (
+      typeof prompt !== "string" ||
+      !prompt.trim() ||
+      typeof response?.text !== "string" ||
+      !response.text.trim() ||
+      !Number.isInteger(threadId) ||
+      threadId < 1
+    )
+      throw Object.assign(new Error("仅可保存完整的问答记录"), { status: 400 });
+    const thread = await db.chat_threads.findFirst({
+      where: { id: threadId, ...scope },
+    });
+    if (!thread)
+      throw Object.assign(new Error("对话不存在或无权访问"), { status: 404 });
+    const now = new Date();
+    const chat = await db.chats.create({
+      data: {
+        ...scope,
+        prompt,
+        response: safeJSONStringify(response),
+        thread_id: threadId,
+        api_session_id: apiSessionId,
+        include,
+        createdAt: now,
+        lastUpdatedAt: now,
+      },
+    });
+    return { chat, message: null };
   },
 
-  forWorkspaceByApiSessionId: async function (
-    workspaceId = null,
-    apiSessionId = null,
-    limit = null,
-    orderBy = null
+  forThread: async function (
+    ctx,
+    threadId,
+    { limit = null, orderBy = { id: "asc" }, include = true } = {},
+    db = prisma
   ) {
-    if (!workspaceId || !apiSessionId) return [];
-    try {
-      const chats = await prisma.workspace_chats.findMany({
-        where: {
-          workspaceId,
-          user_id: null,
-          api_session_id: String(apiSessionId),
-          thread_id: null,
-          include: true,
-        },
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : { orderBy: { id: "asc" } }),
-      });
-      return chats;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    chatScope(ctx);
+    if (!Number.isInteger(threadId) || threadId < 1) return [];
+    return this.where(
+      ctx,
+      {
+        thread_id: threadId,
+        api_session_id: null,
+        ...(include === null ? {} : { include }),
+      },
+      { limit, orderBy },
+      db
+    );
   },
 
-  forWorkspace: async function (
-    workspaceId = null,
-    limit = null,
-    orderBy = null
-  ) {
-    if (!workspaceId) return [];
-    try {
-      const chats = await prisma.workspace_chats.findMany({
-        where: {
-          workspaceId,
-          thread_id: null, // this function is now only used for the default thread on workspaces
-          api_session_id: null, // do not include api-session chats in the frontend for anyone.
-          include: true,
-        },
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : { orderBy: { id: "asc" } }),
-      });
-      return chats;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
-  },
-
-  /**
-   * @deprecated Use markThreadHistoryInvalidV2 instead.
-   */
-  markHistoryInvalid: async function (workspaceId = null, user = null) {
-    if (!workspaceId) return;
-    try {
-      await prisma.workspace_chats.updateMany({
-        where: {
-          workspaceId,
-          user_id: user?.id,
-          thread_id: null, // this function is now only used for the default thread on workspaces
-          api_session_id: null, // API session chats also live on the default thread - a UI reset must not clear them
-        },
-        data: {
-          include: false,
-        },
-      });
-      return;
-    } catch (error) {
-      console.error(error.message);
-    }
-  },
-
-  /**
-   * @deprecated Use markThreadHistoryInvalidV2 instead.
-   */
-  markThreadHistoryInvalid: async function (
-    workspaceId = null,
-    user = null,
-    threadId = null
-  ) {
-    if (!workspaceId || !threadId) return;
-    try {
-      await prisma.workspace_chats.updateMany({
-        where: {
-          workspaceId,
-          thread_id: threadId,
-          user_id: user?.id,
-        },
-        data: {
-          include: false,
-        },
-      });
-      return;
-    } catch (error) {
-      console.error(error.message);
-    }
-  },
-
-  /**
-   * @description This function is used to mark a thread's history as invalid.
-   * and works with an arbitrary where clause.
-   * @param {Object} whereClause - The where clause to update the chats.
-   * @param {Object} data - The data to update the chats with.
-   * @returns {Promise<void>}
-   */
-  markThreadHistoryInvalidV2: async function (whereClause = {}) {
-    if (!whereClause) return;
-    try {
-      await prisma.workspace_chats.updateMany({
-        where: whereClause,
-        data: {
-          include: false,
-        },
-      });
-      return;
-    } catch (error) {
-      console.error(error.message);
-    }
-  },
-
-  get: async function (clause = {}, limit = null, orderBy = null) {
-    try {
-      const chat = await prisma.workspace_chats.findFirst({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-        ...(orderBy !== null ? { orderBy } : {}),
-      });
-      return chat || null;
-    } catch (error) {
-      console.error(error.message);
+  get: async function (ctx, clause = {}, db = prisma) {
+    if (Object.hasOwn(clause, "id") && (!Number.isInteger(clause.id) || clause.id < 1))
       return null;
-    }
+    return db.chats.findFirst({ where: { ...clause, ...chatScope(ctx) } });
   },
 
-  delete: async function (clause = {}) {
-    try {
-      await prisma.workspace_chats.deleteMany({
-        where: clause,
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
+  update: async function (ctx, chatId, data, db = prisma) {
+    const writable = {};
+    for (const key of ["prompt", "include", "memoryProcessed"])
+      if (Object.hasOwn(data, key)) writable[key] = data[key];
+    if (Object.hasOwn(data, "response"))
+      writable.response = safeJSONStringify(data.response);
+    const result = await db.chats.updateMany({
+      where: { id: chatId, ...chatScope(ctx) },
+      data: { ...writable, lastUpdatedAt: new Date() },
+    });
+    return result.count ? this.get(ctx, { id: chatId }, db) : null;
+  },
+
+  // Agent execution reserves a pair before the reply and completes that same row.
+  reserve: async function (ctx, { prompt, threadId }, db = prisma) {
+    const scope = chatScope(ctx);
+    const thread = await db.chat_threads.findFirst({
+      where: { id: threadId, ...scope },
+    });
+    if (!thread)
+      throw Object.assign(new Error("对话不存在或无权访问"), { status: 404 });
+    const now = new Date();
+    return db.chats.create({
+      data: {
+        ...scope,
+        thread_id: threadId,
+        prompt,
+        response: safeJSONStringify({}),
+        include: false,
+        createdAt: now,
+        lastUpdatedAt: now,
+      },
+    });
+  },
+
+  delete: async function (ctx, clause = {}, db = prisma) {
+    await db.chats.deleteMany({ where: { ...clause, ...chatScope(ctx) } });
+    return true;
   },
 
   where: async function (
+    ctx,
     clause = {},
-    limit = null,
-    orderBy = null,
-    offset = null
+    { limit = null, orderBy = { id: "asc" }, offset = null } = {},
+    db = prisma
   ) {
-    try {
-      const chats = await prisma.workspace_chats.findMany({
-        where: clause,
-        ...(limit !== null ? { take: limit } : {}),
-        ...(offset !== null ? { skip: offset } : {}),
-        ...(orderBy !== null ? { orderBy } : {}),
-      });
-      return chats;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
+    return db.chats.findMany({
+      where: { ...clause, ...chatScope(ctx) },
+      ...(limit !== null ? { take: limit } : {}),
+      ...(offset !== null ? { skip: offset } : {}),
+      orderBy,
+    });
   },
 
-  count: async function (clause = {}) {
-    try {
-      const count = await prisma.workspace_chats.count({
-        where: clause,
-      });
-      return count;
-    } catch (error) {
-      console.error(error.message);
-      return 0;
-    }
+  count: async function (ctx, clause = {}, db = prisma) {
+    return db.chats.count({ where: { ...clause, ...chatScope(ctx) } });
   },
 
-  whereWithData: async function (
-    clause = {},
-    limit = null,
-    offset = null,
-    orderBy = null
+  // Reset excludes prior records from normal history and model context.
+  markThreadHistoryInvalid: async function (ctx, threadId, db = prisma) {
+    const scope = chatScope(ctx);
+    if (!Number.isInteger(threadId) || threadId < 1) return { count: 0 };
+    return db.chats.updateMany({
+      where: { thread_id: threadId, ...scope },
+      data: { include: false, lastUpdatedAt: new Date() },
+    });
+  },
+
+  updateFeedbackScore: async function (
+    ctx,
+    chatId,
+    feedbackScore = null,
+    db = prisma
   ) {
-    const { Workspace } = require("./workspace");
-    const { User } = require("./user");
-
-    try {
-      const results = await this.where(clause, limit, orderBy, offset);
-
-      for (const res of results) {
-        const workspace = await Workspace.get({ id: res.workspaceId });
-        res.workspace = workspace
-          ? { name: workspace.name, slug: workspace.slug }
-          : { name: "deleted workspace", slug: null };
-
-        const user = res.user_id ? await User.get({ id: res.user_id }) : null;
-        res.user = user
-          ? { username: user.username }
-          : { username: res.api_session_id !== null ? "API" : "unknown user" };
-      }
-
-      return results;
-    } catch (error) {
-      console.error(error.message);
-      return [];
-    }
-  },
-  updateFeedbackScore: async function (chatId = null, feedbackScore = null) {
-    if (!chatId) return;
-    try {
-      await prisma.workspace_chats.update({
-        where: {
-          id: Number(chatId),
-        },
-        data: {
-          feedbackScore:
-            feedbackScore === null ? null : Number(feedbackScore) === 1,
-        },
-      });
-      return;
-    } catch (error) {
-      console.error(error.message);
-    }
+    if (![null, true, false, 0, 1].includes(feedbackScore))
+      throw Object.assign(new Error("反馈值无效"), { status: 400 });
+    return db.chats.updateMany({
+      where: { id: chatId, ...chatScope(ctx) },
+      data: {
+        feedbackScore: feedbackScore === null ? null : Boolean(feedbackScore),
+        lastUpdatedAt: new Date(),
+      },
+    });
   },
 
-  // Explicit update of settings + key validations.
-  // Only use this method when directly setting a key value
-  // that takes no user input for the keys being modified.
-  _update: async function (id = null, data = {}) {
-    if (!id) throw new Error("No workspace chat id provided for update");
-
-    try {
-      await prisma.workspace_chats.update({
-        where: { id },
-        data: {
-          ...data,
-          lastUpdatedAt: new Date(),
-        },
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-  markMemoryProcessed: async function (ids = []) {
-    if (!Array.isArray(ids) || ids.length === 0) return;
-    try {
-      const safeIds = ids.map(Number).filter(Number.isInteger);
-      if (safeIds.length === 0) return;
-      await prisma.workspace_chats.updateMany({
-        where: { id: { in: safeIds } },
-        data: { memoryProcessed: true },
-      });
-    } catch (error) {
-      console.error(error.message);
-    }
-  },
-
-  migrateToMultiUser: async function (adminUserId) {
-    try {
-      await prisma.workspace_chats.updateMany({
-        where: { user_id: null },
-        data: { user_id: adminUserId },
-      });
-      return true;
-    } catch (error) {
-      console.error(error.message);
-      return false;
-    }
-  },
-
-  bulkCreate: async function (chatsData) {
-    // TODO: Replace with createMany when we update prisma to latest version
-    // The version of prisma that we are currently using does not support createMany with SQLite
-    try {
-      const createdChats = [];
-      for (const chatData of chatsData) {
-        const chat = await prisma.workspace_chats.create({
-          data: chatData,
-        });
-        createdChats.push(chat);
-      }
-      return { chats: createdChats, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { chats: null, message: error.message };
-    }
-  },
-  upsert: async function (
-    chatId = null,
-    data = {
-      workspaceId: null,
-      prompt: null,
-      response: {},
-      user: null,
-      threadId: null,
-      include: true,
-      apiSessionId: null,
-    }
-  ) {
-    try {
-      const payload = {
-        workspaceId: data.workspaceId,
-        response: safeJSONStringify(data.response),
-        user_id: data.user?.id || null,
-        thread_id: data.threadId,
-        api_session_id: data.apiSessionId,
-        include: data.include,
-      };
-
-      const { chat } = await prisma.workspace_chats.upsert({
-        where: {
-          id: Number(chatId),
-          user_id: data.user?.id || null,
-        },
-        // On updates, we already have the prompt so we don't need to set it again.
-        update: { ...payload, lastUpdatedAt: new Date() },
-
-        // On creates, we need to set the prompt or else record will fail.
-        create: { ...payload, prompt: data.prompt },
-      });
-      return { chat, message: null };
-    } catch (error) {
-      console.error(error.message);
-      return { chat: null, message: error.message };
-    }
+  markMemoryProcessed: async function (ctx, ids = [], db = prisma) {
+    const safeIds = ids.filter((id) => Number.isInteger(id) && id > 0);
+    if (!safeIds.length) return;
+    return db.chats.updateMany({
+      where: { id: { in: safeIds }, ...chatScope(ctx) },
+      data: { memoryProcessed: true },
+    });
   },
 };
 
-module.exports = { WorkspaceChats };
+module.exports = { Chat, chatScope };

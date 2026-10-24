@@ -16,9 +16,6 @@
     "lint:check": "eslint .",
     "swagger": "node ./swagger/init.js"
   },
-  "prisma": {
-    "seed": "node prisma/seed.js"
-  },
   "dependencies": {
     "@anthropic-ai/sdk": "^0.39.0",
     "@breejs/later": "4.2.0",

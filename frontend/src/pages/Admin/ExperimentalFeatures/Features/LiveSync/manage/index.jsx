@@ -22,9 +22,9 @@ export default function LiveDocumentSyncManager() {
               </p>
             </div>
             <p className="text-xs leading-[18px] font-base text-theme-text-secondary">
-              These are all the documents that are currently being watched in
-              your instance. The content of these documents will be periodically
-              synced.
+              Your watched sources are periodically synced using your current
+              knowledge access. Public content changes require administrator
+              approval.
             </p>
           </div>
           <div className="overflow-x-auto">

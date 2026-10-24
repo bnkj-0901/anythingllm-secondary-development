@@ -1,6 +1,5 @@
 const prisma = require("../utils/prisma");
 const { v4: uuidv4 } = require("uuid");
-const ip = require("ip");
 
 /**
  * @typedef {Object} TemporaryMobileDeviceRequest
@@ -60,8 +59,10 @@ const MobileDevice = {
    */
   registerTempToken: function (user = null) {
     let tokenData = {};
-    if (user) tokenData.userId = user.id;
-    else tokenData.userId = null;
+    if (user) {
+      tokenData.userId = user.id;
+      tokenData.tenantId = user.tenantId;
+    } else tokenData.userId = null;
 
     // Set short lived expiry to this mapping
     const createdAt = Date.now();
@@ -96,15 +97,10 @@ const MobileDevice = {
    * @param {import("@prisma/client").users|null} user - User to get connection URL for in Multi-User Mode
    * @returns {string}
    */
-  connectionURL: function (user = null) {
-    let baseUrl = "/api/mobile";
-    if (process.env.NODE_ENV === "production") baseUrl = "/api/mobile";
-    else
-      baseUrl = `http://${ip.address()}:${process.env.SERVER_PORT || 3001}/api/mobile`;
-
+  connectionURL: function (user = null, origin = null) {
+    const baseUrl = `${origin || ""}/api/mobile`;
     const tempToken = this.registerTempToken(user);
-    baseUrl = `${baseUrl}?t=${tempToken}`;
-    return baseUrl;
+    return `${baseUrl}?t=${tempToken}`;
   },
 
   /**
@@ -115,7 +111,7 @@ const MobileDevice = {
    * @param {number|null} params.userId - User id to associate creation of key with.
    * @returns {Promise<{device: import("@prisma/client").desktop_mobile_devices|null, error:string|null}>}
    */
-  create: async function ({ deviceOs, deviceName, userId = null }) {
+  create: async function ({ deviceOs, deviceName, userId, tenantId }) {
     try {
       if (!deviceOs || !deviceName)
         return { device: null, error: "Device OS and name are required" };
@@ -127,7 +123,8 @@ const MobileDevice = {
           deviceName: String(deviceName),
           deviceOs: String(deviceOs).toLowerCase(),
           token: uuidv4(),
-          userId: userId ? Number(userId) : null,
+          userId: Number(userId),
+          tenantId,
         },
       });
       return { device, error: null };

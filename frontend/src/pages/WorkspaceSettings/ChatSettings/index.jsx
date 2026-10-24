@@ -11,7 +11,7 @@ import ChatModeSelection from "./ChatModeSelection";
 import WorkspaceLLMSelection from "./WorkspaceLLMSelection";
 import ChatQueryRefusalResponse from "./ChatQueryRefusalResponse";
 
-export default function ChatSettings({ workspace }) {
+export default function ChatSettings({ workspace, onUpdate }) {
   const [settings, setSettings] = useState({});
   useEffect(() => {
     async function fetchSettings() {
@@ -26,6 +26,7 @@ export default function ChatSettings({ workspace }) {
     const form = new FormData(formEl);
     for (var [key, value] of form.entries()) data[key] = castToType(key, value);
 
+    if (onUpdate) return onUpdate(data);
     const { workspace: updatedWorkspace, message } = await Workspace.update(
       workspace.slug,
       data

@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 const { AstraDB: AstraClient } = require("@datastax/astra-db-ts");
 const { TextSplitter } = require("../../TextSplitter");
 const { SystemSettings } = require("../../../models/systemSettings");
@@ -16,6 +17,11 @@ const sanitizeNamespace = (namespace) => {
 };
 
 class AstraDB extends VectorDatabase {
+  // Explicit vector records and authorization filters; no Workspace orchestration.
+  async records(config = {}) {
+    return require("./records").create(config, await this.connect(), this);
+  }
+
   constructor() {
     super();
   }
@@ -25,12 +31,12 @@ class AstraDB extends VectorDatabase {
   }
 
   async connect() {
-    if (process.env.VECTOR_DB !== "astra")
+    if (env.VECTOR_DB !== "astra")
       throw new Error("AstraDB::Invalid ENV settings");
 
     const client = new AstraClient(
-      process?.env?.ASTRA_DB_APPLICATION_TOKEN,
-      process?.env?.ASTRA_DB_ENDPOINT
+      env?.ASTRA_DB_APPLICATION_TOKEN,
+      env?.ASTRA_DB_ENDPOINT
     );
     return { client };
   }

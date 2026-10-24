@@ -1722,4 +1722,6 @@ function dumpENV() {
 module.exports = {
   dumpENV,
   updateENV,
+  KEY_MAPPING,
+  executeValidationChecks,
 };

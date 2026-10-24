@@ -1,3 +1,4 @@
+const { env } = require("../../../enterprise/ai/connection-context");
 /**
  * AWS Bedrock exposes two HTTP endpoint surfaces that both accept Bedrock API
  * key (bearer) auth, but with disjoint model ID support:
@@ -73,7 +74,7 @@ function isOpenAIModelId(modelId = "") {
  */
 function mantleHost(region) {
   return (
-    process.env.AWS_BEDROCK_LLM_MANTLE_ENDPOINT ||
+    env.AWS_BEDROCK_LLM_MANTLE_ENDPOINT ||
     `https://bedrock-mantle.${region}.api.aws`
   );
 }
@@ -85,7 +86,7 @@ function mantleHost(region) {
  */
 function runtimeHost(region) {
   return (
-    process.env.AWS_BEDROCK_LLM_RUNTIME_ENDPOINT ||
+    env.AWS_BEDROCK_LLM_RUNTIME_ENDPOINT ||
     `https://bedrock-runtime.${region}.amazonaws.com`
   );
 }
@@ -97,7 +98,7 @@ function runtimeHost(region) {
  */
 function controlPlaneHost(region) {
   return (
-    process.env.AWS_BEDROCK_LLM_CONTROL_ENDPOINT ||
+    env.AWS_BEDROCK_LLM_CONTROL_ENDPOINT ||
     `https://bedrock.${region}.amazonaws.com`
   );
 }

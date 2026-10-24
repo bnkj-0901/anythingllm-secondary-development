@@ -1,3 +1,9 @@
+const {
+  scopedCacheFolder,
+  env,
+  sdkOptions,
+  scopedFetch,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -12,14 +18,15 @@ const {
 const {
   temperatureParam,
 } = require("../../agents/aibitat/providers/helpers/tooled");
-const cacheFolder = path.resolve(
+const originalCacheFolder = path.resolve(
   process.env.STORAGE_DIR
     ? path.resolve(process.env.STORAGE_DIR, "models", "ppio")
     : path.resolve(__dirname, `../../../storage/models/ppio`)
 );
+const cacheFolder = () => scopedCacheFolder(originalCacheFolder);
 
 function cachedPPIOModels() {
-  const cacheModelPath = path.resolve(cacheFolder, "models.json");
+  const cacheModelPath = path.resolve(cacheFolder(), "models.json");
   if (!fs.existsSync(cacheModelPath)) return {};
   return safeJsonParse(
     fs.readFileSync(cacheModelPath, { encoding: "utf-8" }),
@@ -29,23 +36,23 @@ function cachedPPIOModels() {
 
 class PPIOLLM {
   constructor(embedder = null, modelPreference = null) {
-    if (!process.env.PPIO_API_KEY) throw new Error("No PPIO API key was set.");
+    if (!env.PPIO_API_KEY) throw new Error("No PPIO API key was set.");
 
     this.className = "PPIOLLM";
     const { OpenAI: OpenAIApi } = require("openai");
     this.basePath = "https://api.ppinfra.com/v3/openai/";
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: process.env.PPIO_API_KEY ?? null,
-      defaultHeaders: {
-        "HTTP-Referer": "https://anythingllm.com",
-        "X-API-Source": "anythingllm",
-      },
-    });
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: env.PPIO_API_KEY ?? null,
+        defaultHeaders: {
+          "HTTP-Referer": "https://anythingllm.com",
+          "X-API-Source": "anythingllm",
+        },
+      })
+    );
     this.model =
-      modelPreference ||
-      process.env.PPIO_MODEL_PREF ||
-      "qwen/qwen2.5-32b-instruct";
+      modelPreference || env.PPIO_MODEL_PREF || "qwen/qwen2.5-32b-instruct";
     this.limits = {
       history: this.promptWindowLimit() * 0.15,
       system: this.promptWindowLimit() * 0.15,
@@ -54,10 +61,10 @@ class PPIOLLM {
 
     this.embedder = embedder ?? new NativeEmbedder();
 
-    if (!fs.existsSync(cacheFolder))
-      fs.mkdirSync(cacheFolder, { recursive: true });
-    this.cacheModelPath = path.resolve(cacheFolder, "models.json");
-    this.cacheAtPath = path.resolve(cacheFolder, ".cached_at");
+    if (!fs.existsSync(cacheFolder()))
+      fs.mkdirSync(cacheFolder(), { recursive: true });
+    this.cacheModelPath = path.resolve(cacheFolder(), "models.json");
+    this.cacheAtPath = path.resolve(cacheFolder(), ".cached_at");
 
     this.log(`Loaded with model: ${this.model}`);
   }
@@ -246,11 +253,11 @@ class PPIOLLM {
 }
 
 async function fetchPPIOModels() {
-  return await fetch(`https://api.ppinfra.com/v3/openai/models`, {
+  return await scopedFetch(`https://api.ppinfra.com/v3/openai/models`, {
     method: "GET",
     headers: {
       "Content-Type": "application/json",
-      Authorization: `Bearer ${process.env.PPIO_API_KEY}`,
+      Authorization: `Bearer ${env.PPIO_API_KEY}`,
     },
   })
     .then((res) => res.json())
@@ -266,17 +273,17 @@ async function fetchPPIOModels() {
         };
       });
 
-      if (!fs.existsSync(cacheFolder))
-        fs.mkdirSync(cacheFolder, { recursive: true });
+      if (!fs.existsSync(cacheFolder()))
+        fs.mkdirSync(cacheFolder(), { recursive: true });
       fs.writeFileSync(
-        path.resolve(cacheFolder, "models.json"),
+        path.resolve(cacheFolder(), "models.json"),
         JSON.stringify(models),
         {
           encoding: "utf-8",
         }
       );
       fs.writeFileSync(
-        path.resolve(cacheFolder, ".cached_at"),
+        path.resolve(cacheFolder(), ".cached_at"),
         String(Number(new Date())),
         {
           encoding: "utf-8",

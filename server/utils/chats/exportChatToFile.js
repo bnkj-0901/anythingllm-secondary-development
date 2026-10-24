@@ -119,10 +119,13 @@ async function messageImages(msg = {}) {
 // Build a clean markdown document from a converted chat history.
 async function chatHistoryToMarkdown(
   history = [],
-  { workspaceName, threadName }
+  { conversationName, workspaceName, threadName }
 ) {
-  const lines = [`**Workspace:** ${workspaceName}  `];
-  if (threadName) lines.push(`**Thread:** ${threadName}  `);
+  const lines = conversationName
+    ? [`**Conversation:** ${conversationName}  `]
+    : [`**Workspace:** ${workspaceName}  `];
+  if (!conversationName && threadName)
+    lines.push(`**Thread:** ${threadName}  `);
   lines.push(`**Exported:** ${moment().format("MMMM D, YYYY h:mm A")}`, "");
 
   for (const msg of history) {
@@ -147,9 +150,14 @@ async function chatHistoryToMarkdown(
   return lines.join("\n");
 }
 
-function chatHistoryToPlainText(history = [], { workspaceName, threadName }) {
-  const lines = [`Workspace: ${workspaceName}`];
-  if (threadName) lines.push(`Thread: ${threadName}`);
+function chatHistoryToPlainText(
+  history = [],
+  { conversationName, workspaceName, threadName }
+) {
+  const lines = conversationName
+    ? [`Conversation: ${conversationName}`]
+    : [`Workspace: ${workspaceName}`];
+  if (!conversationName && threadName) lines.push(`Thread: ${threadName}`);
   lines.push(`Exported: ${moment().format("MMMM D, YYYY h:mm A")}`, "");
 
   for (const msg of history) {
@@ -167,7 +175,10 @@ function chatHistoryToPlainText(history = [], { workspaceName, threadName }) {
   return lines.join("\n");
 }
 
-function chatHistoryToJSON(history = [], { workspaceName, threadName }) {
+function chatHistoryToJSON(
+  history = [],
+  { conversationName, workspaceName, threadName }
+) {
   const messages = [];
   for (const msg of history) {
     if (msg.role !== "user" && msg.role !== "assistant") continue;
@@ -186,8 +197,9 @@ function chatHistoryToJSON(history = [], { workspaceName, threadName }) {
 
   return JSON.stringify(
     {
-      workspace: workspaceName,
-      thread: threadName || null,
+      ...(conversationName
+        ? { conversation: conversationName }
+        : { workspace: workspaceName, thread: threadName || null }),
       exported: moment().toISOString(),
       messages,
     },
@@ -196,10 +208,13 @@ function chatHistoryToJSON(history = [], { workspaceName, threadName }) {
   );
 }
 
-async function chatHistoryToHTML(history = [], { workspaceName, threadName }) {
-  const rawTitle = threadName
-    ? `${workspaceName} — ${threadName}`
-    : workspaceName;
+async function chatHistoryToHTML(
+  history = [],
+  { conversationName, workspaceName, threadName }
+) {
+  const rawTitle =
+    conversationName ||
+    (threadName ? `${workspaceName} — ${threadName}` : workspaceName);
   const exported = moment().format("MMMM D, YYYY h:mm A");
 
   function escapeHtml(str) {
@@ -277,7 +292,7 @@ async function chatHistoryToHTML(history = [], { workspaceName, threadName }) {
  * Reuses the same markdown -> PDF pipeline as the create-pdf-file agent skill so
  * it works identically across browser and desktop builds.
  * @param {Object[]} history - Output of convertToChatHistory
- * @param {{workspaceName: string, threadName?: string|null}} meta
+ * @param {{conversationName?: string, workspaceName?: string, threadName?: string|null}} meta
  * @returns {Promise<Buffer>}
  */
 async function chatHistoryToPDF(history = [], meta = {}) {
@@ -295,8 +310,8 @@ async function chatHistoryToPDF(history = [], meta = {}) {
  * Generate the chat-history PDF and write it as the response body. The frontend
  * reads it as a blob and names the download itself.
  * @param {import("express").Response} response
- * @param {Object[]} chats - Raw workspace_chats records
- * @param {{workspaceName: string, threadName?: string|null}} meta
+ * @param {Object[]} chats - Authorized chat pair records
+ * @param {{conversationName?: string, workspaceName?: string, threadName?: string|null}} meta
  */
 async function sendChatHistoryFile(response, chats, meta, type = "pdf") {
   switch (type) {

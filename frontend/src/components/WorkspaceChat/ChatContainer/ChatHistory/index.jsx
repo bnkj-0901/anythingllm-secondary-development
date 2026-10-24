@@ -227,13 +227,17 @@ export default forwardRef(function (
  * @param {WebSocket} param0.websocket - The active websocket connection for agent communication.
  * @returns {Array} The compiled history of messages.
  */
-function buildMessages({
+export function buildMessages({
   history,
   workspace,
   regenerateAssistantMessage,
   saveEditedMessage,
   forkThread,
   websocket,
+  updateFeedback,
+  fetchTTSAudio,
+  onSources,
+  isStreaming = false,
 }) {
   return history.reduce((acc, props, index) => {
     const isLastBotReply =
@@ -344,16 +348,21 @@ function buildMessages({
             workspace={workspace}
             sources={props.sources}
             feedbackScore={props.feedbackScore}
+            updateFeedback={updateFeedback}
             chatId={props.chatId}
             error={props.error}
             attachments={props.attachments}
             regenerateMessage={regenerateAssistantMessage}
-            isLastMessage={isLastBotReply}
+            isLastMessage={isLastBotReply && !isStreaming && !props.pending}
             saveEditedMessage={saveEditedMessage}
             forkThread={forkThread}
             metrics={props.metrics}
             outputs={props.outputs}
             clarifyingQuestions={props.clarifyingQuestions}
+            ttsEnabled={!props.pending && !props.failed && !props.ephemeral}
+            ttsChatId={props.chatId}
+            fetchTTSAudio={fetchTTSAudio}
+            onSources={onSources}
           />
         );
       }

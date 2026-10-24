@@ -6,7 +6,7 @@ import { Warning } from "@phosphor-icons/react";
 import { Tooltip } from "react-tooltip";
 import Toggle from "@/components/lib/Toggle";
 
-export default function ConfluenceOptions() {
+export default function ConfluenceOptions({ onImport } = {}) {
   const { t } = useTranslation();
   const [loading, setLoading] = useState(false);
   const [accessType, setAccessType] = useState("username");
@@ -26,7 +26,9 @@ export default function ConfluenceOptions() {
           autoClose: false,
         }
       );
-      const { data, error } = await System.dataConnectors.confluence.collect({
+      const { data, error } = await (
+        onImport || System.dataConnectors.confluence.collect
+      )({
         baseUrl: form.get("baseUrl"),
         spaceKey: form.get("spaceKey"),
         username: form.get("username"),
@@ -38,6 +40,12 @@ export default function ConfluenceOptions() {
 
       if (!!error) {
         showToast(error, "error", { clear: true });
+        setLoading(false);
+        return;
+      }
+
+      if (onImport) {
+        showToast(data.message, "success", { clear: true });
         setLoading(false);
         return;
       }

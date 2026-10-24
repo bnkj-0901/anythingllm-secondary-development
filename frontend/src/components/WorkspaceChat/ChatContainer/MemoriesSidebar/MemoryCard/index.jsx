@@ -1,18 +1,11 @@
 import moment from "moment";
 import { useEffect, useRef, useState } from "react";
 import { DotsThreeVertical } from "@phosphor-icons/react";
-import { useMemoriesContext, LIMITS } from "../MemoriesContext";
+import { useMemoriesContext } from "../MemoriesContext";
 import CardMenu from "./CardMenu";
 
 export default function MemoryCard({ memory }) {
-  const {
-    activeTab,
-    memories,
-    handleDelete,
-    openEditModal,
-    handlePromote,
-    handleDemote,
-  } = useMemoriesContext();
+  const { handleDelete, openEditModal } = useMemoriesContext();
 
   const [menuOpen, setMenuOpen] = useState(false);
   const menuRef = useRef(null);
@@ -33,11 +26,6 @@ export default function MemoryCard({ memory }) {
     document.addEventListener("mousedown", handleClickOutside);
     return () => document.removeEventListener("mousedown", handleClickOutside);
   }, [menuOpen]);
-
-  const isWorkspace = activeTab === "workspace";
-  const canMove = isWorkspace
-    ? memories.global.length < LIMITS.global
-    : memories.workspace.length < LIMITS.workspace;
 
   return (
     <div className="relative shrink-0 bg-zinc-900 light:bg-white light:border light:border-slate-300 rounded-lg p-3 flex gap-0.5 items-start">
@@ -61,16 +49,10 @@ export default function MemoryCard({ memory }) {
         <CardMenu
           menuRef={menuRef}
           buttonRef={buttonRef}
-          isWorkspace={isWorkspace}
-          canMove={canMove}
+          canMove={false}
           onEdit={() => {
             setMenuOpen(false);
             openEditModal(memory);
-          }}
-          onMove={() => {
-            setMenuOpen(false);
-            if (isWorkspace) handlePromote(memory.id);
-            else handleDemote(memory.id);
           }}
           onDelete={() => {
             setMenuOpen(false);

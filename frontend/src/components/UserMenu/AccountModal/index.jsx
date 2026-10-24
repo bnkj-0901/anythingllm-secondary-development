@@ -27,7 +27,7 @@ import {
   USERNAME_PATTERN,
 } from "@/utils/username";
 
-export default function AccountModal({ user, hideModal }) {
+export default function AccountModal({ user, hideModal, onUpdate }) {
   const { pfp, setPfp } = usePfp();
   const { t } = useTranslation();
 
@@ -68,9 +68,11 @@ export default function AccountModal({ user, hideModal }) {
       data[key] = value;
     }
 
-    const { success, error } = await System.updateUser(data);
+    const { success, error } = await (onUpdate || System.updateUser)(data);
     if (success) {
-      let storedUser = safeJsonParse(localStorage.getItem(AUTH_USER), null);
+      let storedUser = onUpdate
+        ? null
+        : safeJsonParse(localStorage.getItem(AUTH_USER), null);
       if (storedUser) {
         storedUser.username = data.username;
         storedUser.bio = data.bio;

@@ -1,3 +1,9 @@
+const {
+  env,
+  sdkOptions,
+  scopedFetch,
+  scopedCache,
+} = require("../../../enterprise/ai/connection-context");
 const { NativeEmbedder } = require("../../EmbeddingEngines/native");
 const {
   handleDefaultStreamResponseV2,
@@ -11,27 +17,35 @@ const {
 } = require("../../agents/aibitat/providers/helpers/tooled");
 
 class KoboldCPPLLM {
-  static contextWindowSize = null;
+  static _contextWindowState = { value: null };
+  static get contextWindowSize() {
+    return scopedCache(this._contextWindowState).value ?? null;
+  }
+  static set contextWindowSize(value) {
+    scopedCache(this._contextWindowState).value = value;
+  }
 
   constructor(embedder = null, modelPreference = null) {
     const { OpenAI: OpenAIApi } = require("openai");
-    if (!process.env.KOBOLD_CPP_BASE_PATH)
+    if (!env.KOBOLD_CPP_BASE_PATH)
       throw new Error(
         "KoboldCPP must have a valid base path to use for the api."
       );
 
     this.className = "KoboldCPPLLM";
-    this.basePath = process.env.KOBOLD_CPP_BASE_PATH;
-    this.openai = new OpenAIApi({
-      baseURL: this.basePath,
-      apiKey: null,
-    });
-    this.model = modelPreference ?? process.env.KOBOLD_CPP_MODEL_PREF ?? null;
+    this.basePath = env.KOBOLD_CPP_BASE_PATH;
+    this.openai = new OpenAIApi(
+      sdkOptions({
+        baseURL: this.basePath,
+        apiKey: null,
+      })
+    );
+    this.model = modelPreference ?? env.KOBOLD_CPP_MODEL_PREF ?? null;
     if (!this.model) throw new Error("KoboldCPP must have a valid model set.");
 
     this.embedder = embedder ?? new NativeEmbedder();
-    this.maxTokens = process.env.KOBOLD_CPP_MAX_TOKENS
-      ? Number(process.env.KOBOLD_CPP_MAX_TOKENS)
+    this.maxTokens = env.KOBOLD_CPP_MAX_TOKENS
+      ? Number(env.KOBOLD_CPP_MAX_TOKENS)
       : null;
 
     this.limits = null;
@@ -48,10 +62,12 @@ class KoboldCPPLLM {
   static async cacheContextWindow() {
     if (KoboldCPPLLM.contextWindowSize !== null) return;
     try {
-      const basePath = process.env.KOBOLD_CPP_BASE_PATH;
+      const basePath = env.KOBOLD_CPP_BASE_PATH;
       if (!basePath) return;
       const origin = new URL(basePath).origin;
-      const res = await fetch(`${origin}/api/extra/true_max_context_length`);
+      const res = await scopedFetch(
+        `${origin}/api/extra/true_max_context_length`
+      );
       if (!res.ok) throw new Error(res.statusText);
       const data = await res.json();
       if (data?.value && !isNaN(Number(data.value))) {
@@ -94,7 +110,7 @@ class KoboldCPPLLM {
   }
 
   static promptWindowLimit(_modelName) {
-    const userLimit = process.env.KOBOLD_CPP_MODEL_TOKEN_LIMIT;
+    const userLimit = env.KOBOLD_CPP_MODEL_TOKEN_LIMIT;
     if (userLimit && !isNaN(Number(userLimit)) && Number(userLimit) > 0) {
       const systemLimit = KoboldCPPLLM.contextWindowSize;
       if (systemLimit) return Math.min(Number(userLimit), systemLimit);
