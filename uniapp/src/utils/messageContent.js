@@ -1,166 +1,220 @@
-// rich-text receives a node tree, never HTML from a model or document. Every
-// untrusted value is a text node; only the fixed tags/styles below are emitted.
-function appendText(nodes, value) {
-  String(value)
+import MarkdownIt from "markdown-it/dist/markdown-it.js";
+
+// Match the existing web client's Markdown-it grammar. Rendering stays native
+// because uni-app rich-text does not share React's HTML/DOM renderer.
+const markdown = new MarkdownIt({ html: false, typographer: true });
+
+export function normalizeThoughtIndentation(text = "") {
+  let inFence = false;
+  return String(text ?? "")
     .split("\n")
-    .forEach((part, index) => {
-      if (index) nodes.push({ name: "br" });
-      if (part) nodes.push({ type: "text", text: part });
-    });
+    .map((line) => {
+      if (line.trim().startsWith("```")) {
+        inFence = !inFence;
+        return line;
+      }
+      if (inFence) return line;
+      const width = line.match(/^[ \t]*/)[0].replace(/\t/g, "    ").length;
+      const normWidth = width >= 4 ? Math.floor(width / 2) : width;
+      const dedented = " ".repeat(normWidth) + line.trimStart();
+      return dedented.replace(/^(\s*(?:[*+-]|\d+[.)]))\s{2,}/, "$1 ");
+    })
+    .join("\n");
 }
 
-export function inlineNodes(value, depth = 0) {
-  const text = String(value || "");
-  if (depth > 4) return [{ type: "text", text }];
-
-  const nodes = [];
-  const tokens =
-    /`([^`\n]+)`|\*\*([^\n]+?)\*\*|__([^\n]+?)__|\*([^*\n]+)\*|!\[([^\]\n]*)\]\([^\n)]*\)|\[([^\]\n]+)\]\([^\n)]*\)/g;
-  let cursor = 0;
-  let match;
-  while ((match = tokens.exec(text))) {
-    appendText(nodes, text.slice(cursor, match.index));
-    if (match[1] !== undefined) {
-      nodes.push({
-        name: "span",
-        attrs: {
-          style:
-            "font-family:monospace;background:#f0f2f5;color:#48556a;padding:2px 5px;border-radius:4px;",
-        },
-        children: [{ type: "text", text: match[1] }],
-      });
-    } else if (match[2] !== undefined || match[3] !== undefined) {
-      nodes.push({
-        name: "strong",
-        children: inlineNodes(match[2] ?? match[3], depth + 1),
-      });
-    } else if (match[4] !== undefined) {
-      nodes.push({ name: "em", children: inlineNodes(match[4], depth + 1) });
-    } else if (match[5] !== undefined) {
-      appendText(nodes, match[5] ? `[图片：${match[5]}]` : "[图片]");
-    } else {
-      // Keep link labels readable without opening arbitrary model-generated URLs.
-      appendText(nodes, match[6]);
-    }
-    cursor = tokens.lastIndex;
+// Syntax, escaping, entities and incomplete streaming input are all parsed by
+// the same Markdown-it rules as the web client. This adapter only chooses
+// the safe native nodes and block components used to display those tokens.
+export function parseMessageTokens(
+  value,
+  { thought = false, inline = false } = {}
+) {
+  const content = String(value ?? "");
+  const parse = (text) =>
+    inline ? markdown.parseInline(text, {}) : markdown.parse(text, {});
+  if (!thought) return parse(content);
+  // This follows renderThoughtMarkdown on the web: normalize padded lists and
+  // disable indented code only for this synchronous thought snapshot.
+  markdown.disable("code");
+  try {
+    return parse(normalizeThoughtIndentation(content));
+  } finally {
+    markdown.enable("code");
   }
-  appendText(nodes, text.slice(cursor));
-  return nodes;
 }
 
-const fencePattern = /^ {0,3}(`{3,}|~{3,})(.*)$/;
-const headingPattern = /^ {0,3}(#{1,6})\s+(.+)$/;
-const listPattern = /^\s{0,3}([-+*]|\d+[.)])\s+(.+)$/;
-const quotePattern = /^ {0,3}>\s?(.*)$/;
-const rulePattern = /^ {0,3}(?:-{3,}|\*{3,}|_{3,})\s*$/;
+function tokenTree(tokens) {
+  const roots = [];
+  const stack = [roots];
+  for (const token of tokens || []) {
+    if (token.nesting === -1) {
+      if (stack.length > 1) stack.pop();
+      continue;
+    }
+    const item = { token, children: [] };
+    stack[stack.length - 1].push(item);
+    if (token.nesting === 1) stack.push(item.children);
+  }
+  return roots;
+}
 
-function isBlockStart(line) {
-  return (
-    fencePattern.test(line) ||
-    headingPattern.test(line) ||
-    listPattern.test(line) ||
-    quotePattern.test(line) ||
-    rulePattern.test(line)
+function textNode(text) {
+  return { type: "text", text };
+}
+
+function inlineTreeNodes(items) {
+  return items.flatMap(({ token, children }) => {
+    switch (token.type) {
+      case "strong_open":
+      case "em_open":
+      case "s_open":
+        return [{ name: token.tag, children: inlineTreeNodes(children) }];
+      case "code_inline":
+        return [
+          {
+            name: "span",
+            attrs: {
+              style:
+                "font-family:monospace;background:#f0f2f5;color:#48556a;padding:2px 5px;border-radius:4px;",
+            },
+            children: [textNode(token.content)],
+          },
+        ];
+      case "softbreak":
+        // The web renderer leaves soft breaks as whitespace (breaks:false).
+        return [textNode("\n")];
+      case "hardbreak":
+        return [{ name: "br" }];
+      case "link_open":
+        // Native rich-text has no common link interaction contract. Keep the
+        // Markdown-it label/formatting while leaving navigation to the app.
+        return inlineTreeNodes(children);
+      case "image": {
+        const label = markdown.renderer.renderInlineAsText(
+          token.children || [],
+          markdown.options,
+          {}
+        );
+        return [textNode(label ? `[图片：${label}]` : "[图片]")];
+      }
+      default:
+        // html:false prevents HTML tokens; fallback content is always text.
+        return token.content
+          ? [textNode(token.content)]
+          : inlineTreeNodes(children);
+    }
+  });
+}
+
+function inlineTokenNodes(tokens) {
+  return inlineTreeNodes(tokenTree(tokens));
+}
+
+export function inlineNodes(value) {
+  return parseMessageTokens(value, { inline: true }).flatMap((token) =>
+    inlineTokenNodes(token.children)
   );
 }
 
-export function parseMessageContent(value) {
-  const lines = String(value || "")
-    .replace(/\r\n?/g, "\n")
-    .split("\n");
-  const blocks = [];
-  let index = 0;
-  while (index < lines.length) {
-    const line = lines[index];
-    if (!line.trim()) {
-      index += 1;
-      continue;
-    }
+function inlineChildren(items) {
+  return items.flatMap(({ token }) =>
+    token.type === "inline" ? inlineTokenNodes(token.children) : []
+  );
+}
 
-    const fence = line.match(fencePattern);
-    if (fence) {
-      const marker = fence[1][0];
-      const closingPattern = new RegExp(
-        `^ {0,3}${marker}{${fence[1].length},}\\s*$`
-      );
-      const code = [];
-      index += 1;
-      while (index < lines.length && !closingPattern.test(lines[index])) {
-        code.push(lines[index]);
-        index += 1;
-      }
-      if (index < lines.length) index += 1;
-      blocks.push({
-        type: "code",
-        language: fence[2].trim().split(/\s+/)[0] || "code",
-        content: code.join("\n"),
-      });
-      continue;
-    }
-
-    const heading = line.match(headingPattern);
-    if (heading) {
-      blocks.push({
-        type: "heading",
-        level: heading[1].length,
-        nodes: inlineNodes(heading[2].replace(/\s+#+\s*$/, "")),
-      });
-      index += 1;
-      continue;
-    }
-
-    if (rulePattern.test(line)) {
-      blocks.push({ type: "rule" });
-      index += 1;
-      continue;
-    }
-
-    const list = line.match(listPattern);
-    if (list) {
-      const ordered = /^\d/.test(list[1]);
-      const items = [];
-      while (index < lines.length) {
-        const item = lines[index].match(listPattern);
-        if (!item || /^\d/.test(item[1]) !== ordered) break;
-        items.push({
-          marker: ordered ? item[1].replace(")", ".") : "•",
-          nodes: inlineNodes(item[2]),
+function tableBlock(item) {
+  const rows = [];
+  let headers = [];
+  let alignments = [];
+  for (const section of item.children) {
+    for (const row of section.children) {
+      const cells = row.children.map((cell) => inlineChildren(cell.children));
+      if (section.token.type === "thead_open") {
+        headers = cells;
+        alignments = row.children.map(({ token }) => {
+          const style = token.attrGet("style");
+          return style === "text-align:right"
+            ? "right"
+            : style === "text-align:center"
+              ? "center"
+              : "left";
         });
-        index += 1;
+      } else {
+        rows.push(cells);
       }
-      blocks.push({ type: "list", items });
-      continue;
     }
-
-    const quote = line.match(quotePattern);
-    if (quote) {
-      const quoted = [];
-      while (index < lines.length) {
-        const item = lines[index].match(quotePattern);
-        if (!item) break;
-        quoted.push(item[1]);
-        index += 1;
-      }
-      blocks.push({ type: "quote", nodes: inlineNodes(quoted.join("\n")) });
-      continue;
-    }
-
-    const paragraph = [line];
-    index += 1;
-    while (
-      index < lines.length &&
-      lines[index].trim() &&
-      !isBlockStart(lines[index])
-    ) {
-      paragraph.push(lines[index]);
-      index += 1;
-    }
-    blocks.push({
-      type: "paragraph",
-      nodes: inlineNodes(paragraph.join("\n")),
-    });
   }
-  return blocks;
+  return { type: "table", headers, alignments, rows };
+}
+
+function blockTree(items) {
+  return items.flatMap((item) => {
+    const { token, children } = item;
+    switch (token.type) {
+      case "paragraph_open":
+        return [{ type: "paragraph", nodes: inlineChildren(children) }];
+      case "heading_open":
+        return [
+          {
+            type: "heading",
+            level: Number(token.tag.slice(1)),
+            nodes: inlineChildren(children),
+          },
+        ];
+      case "fence":
+      case "code_block":
+        return [
+          {
+            type: "code",
+            language: token.info.trim().split(/\s+/)[0] || "code",
+            content: token.content.endsWith("\n")
+              ? token.content.slice(0, -1)
+              : token.content,
+          },
+        ];
+      case "hr":
+        return [{ type: "rule" }];
+      case "table_open":
+        return [tableBlock(item)];
+      case "bullet_list_open":
+      case "ordered_list_open": {
+        const ordered = token.type === "ordered_list_open";
+        const start = Number(token.attrGet("start") || 1);
+        return [
+          {
+            type: "list",
+            ordered,
+            items: children.map((child, index) => {
+              const blocks = blockTree(child.children);
+              return {
+                marker: ordered ? `${start + index}.` : "•",
+                nodes: blocks[0]?.nodes || [],
+                blocks,
+              };
+            }),
+          },
+        ];
+      }
+      case "blockquote_open": {
+        const blocks = blockTree(children);
+        return [
+          {
+            type: "quote",
+            nodes: blocks.flatMap((block) => block.nodes || []),
+            blocks,
+          },
+        ];
+      }
+      default:
+        return token.content
+          ? [{ type: "paragraph", nodes: [textNode(token.content)] }]
+          : blockTree(children);
+    }
+  });
+}
+
+export function parseMessageContent(value, options = {}) {
+  return blockTree(tokenTree(parseMessageTokens(value, options)));
 }
 
 function nonEmptyText(...values) {

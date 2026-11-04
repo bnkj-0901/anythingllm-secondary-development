@@ -3,78 +3,71 @@
     class="chat-message"
     :class="isUser ? 'chat-message--user' : 'chat-message--assistant'"
   >
-    <view v-if="!isUser" class="message-identity">
-      <view class="assistant-mark">
-        <wd-icon name="chat" size="15" color="#ffffff" />
-      </view>
-      <text class="assistant-name">{{ assistantName }}</text>
-      <text v-if="message.knowledgeScope" class="message-scope">{{
-        message.knowledgeScope
-      }}</text>
+    <view v-if="!isUser && message.knowledgeScope" class="message-identity">
+      <text class="message-scope">{{ message.knowledgeScope }}</text>
     </view>
 
     <view v-if="isUser" class="user-bubble">
       <text class="user-content" selectable>{{ message.content }}</text>
     </view>
     <view v-else class="assistant-body">
-      <view
-        v-for="(block, blockIndex) in blocks"
-        :key="blockIndex"
-        class="content-block"
-        :class="`content-block--${block.type}`"
-      >
-        <view v-if="block.type === 'code'" class="code-block">
-          <view class="code-toolbar">
-            <text class="code-language">{{ block.language }}</text>
-            <wd-button
-              type="text"
-              size="small"
-              :icon="copied === `code-${blockIndex}` ? 'check' : 'file-copy'"
-              custom-style="height: 34px; padding: 0 2px; color: #cbd5e1; font-size: 12px; --wot-button-icon-fs: 14px;"
-              @click="copyText(block.content, `code-${blockIndex}`)"
-            >
-              {{ copied === `code-${blockIndex}` ? "已复制" : "复制代码" }}
-            </wd-button>
-          </view>
-          <scroll-view scroll-x class="code-scroll">
-            <text class="code-content" selectable>{{
-              block.content || " "
-            }}</text>
-          </scroll-view>
-        </view>
-        <view v-else-if="block.type === 'list'" class="markdown-list">
-          <view
-            v-for="(item, itemIndex) in block.items"
-            :key="itemIndex"
-            class="markdown-list-item"
+      <view v-if="answer.hasReasoning" class="reasoning-panel">
+        <button
+          class="reasoning-heading"
+          hover-class="reasoning-heading--hover"
+          :aria-expanded="expandedReasoning"
+          :aria-label="reasoningLabel"
+          @click="expandedReasoning = !expandedReasoning"
+        >
+          <image class="reasoning-icon" src="/static/icons/brain.svg" />
+          <text
+            class="reasoning-label"
+            :class="{ 'reasoning-label--thinking': answer.thinking }"
+            >{{ reasoningLabel }}</text
           >
-            <text class="list-marker">{{ item.marker }}</text>
-            <rich-text
-              class="inline-rich-text"
-              :nodes="item.nodes"
-              user-select
-            />
+          <image
+            class="reasoning-caret"
+            :class="{ 'reasoning-caret--expanded': expandedReasoning }"
+            src="/static/icons/caret-right.svg"
+          />
+        </button>
+        <wd-transition
+          :show="expandedReasoning"
+          :duration="150"
+          lazy-render
+          name="fade"
+          enter-class="chat-thought-enter"
+          leave-to-class="chat-thought-leave-to"
+          custom-style="transition-property: opacity, transform; transition-timing-function: ease-out;"
+        >
+          <view class="reasoning-content">
+            <view class="reasoning-step-icon">
+              <image src="/static/icons/brain.svg" />
+            </view>
+            <view class="reasoning-text">
+              <MessageBlocks
+                :blocks="reasoningBlocks"
+                :copied="copied"
+                copy-prefix="reasoning-code"
+                @copy="copyText"
+              />
+            </view>
           </view>
-        </view>
-        <view v-else-if="block.type === 'rule'" class="markdown-rule" />
-        <rich-text
-          v-else
-          class="message-rich-text"
-          :class="
-            block.type === 'heading'
-              ? `markdown-heading markdown-heading--${block.level}`
-              : ''
-          "
-          :nodes="block.nodes"
-          user-select
-        />
+        </wd-transition>
       </view>
+      <MessageBlocks :blocks="blocks" :copied="copied" @copy="copyText" />
 
-      <view v-if="message.pending && !message.content" class="thinking-state">
+      <view
+        v-if="message.pending && !answer.content && !answer.hasReasoning"
+        class="thinking-state"
+      >
         <wd-loading size="16" color="#287b5f" />
         <text>正在思考</text>
       </view>
-      <view v-else-if="message.pending" class="generation-state">
+      <view
+        v-else-if="message.pending && !answer.thinking"
+        class="generation-state"
+      >
         <wd-loading size="13" color="#287b5f" />
         <text>正在生成</text>
       </view>
@@ -90,72 +83,74 @@
       >
 
       <view v-if="sources.length && !message.pending" class="message-sources">
-        <view class="sources-heading"
-          ><text class="sources-label">参考来源</text
-          ><text class="sources-count">{{ sources.length }}</text></view
+        <button
+          class="sources-toggle"
+          hover-class="sources-toggle--hover"
+          :aria-expanded="expandedSources"
+          :aria-label="`${expandedSources ? '收起' : '展开'} ${sources.length} 个参考来源`"
+          @click="expandedSources = !expandedSources"
         >
-        <wd-collapse v-model="expandedSource" accordion>
-          <wd-collapse-item
-            v-for="(source, sourceIndex) in visibleSources"
-            :key="source.id"
-            :name="source.id"
-            custom-style="--wot-collapse-header-padding: 11px 0; --wot-collapse-body-padding: 0 0 12px;"
-            custom-body-style="font-size: 13px; line-height: 1.7; color: #667085;"
-          >
-            <template #title="{ expanded }">
-              <view class="source-heading">
-                <text class="source-number">{{
-                  source.citationNumber || sourceIndex + 1
-                }}</text>
-                <text class="source-title">{{ source.title }}</text>
-                <wd-icon
-                  :name="expanded ? 'arrow-up' : 'arrow-down'"
-                  size="14"
-                  color="#98a2b3"
-                />
+          <wd-icon name="books" size="16" color="#667085" />
+          <text class="sources-label">参考来源</text>
+          <text class="sources-count">{{ sources.length }}</text>
+          <image
+            class="sources-caret"
+            :class="{ 'sources-caret--expanded': expandedSources }"
+            src="/static/icons/caret-right.svg"
+          />
+        </button>
+        <view v-if="expandedSources" class="sources-list">
+          <wd-collapse v-model="expandedSource" accordion>
+            <wd-collapse-item
+              v-for="(source, sourceIndex) in sources"
+              :key="source.id"
+              :name="source.id"
+              custom-style="--wot-collapse-header-padding: 11px 0; --wot-collapse-body-padding: 0 0 12px;"
+              custom-body-style="font-size: 13px; line-height: 1.7; color: #667085;"
+            >
+              <template #title="{ expanded }">
+                <view class="source-heading">
+                  <text class="source-number">{{
+                    source.citationNumber || sourceIndex + 1
+                  }}</text>
+                  <text class="source-title">{{ source.title }}</text>
+                  <wd-icon
+                    :name="expanded ? 'arrow-up' : 'arrow-down'"
+                    size="14"
+                    color="#98a2b3"
+                  />
+                </view>
+              </template>
+              <view class="source-summary">
+                <text selectable
+                  >{{ source.summary || "该来源未返回内容摘要。"
+                  }}{{ source.truncated ? "…" : "" }}</text
+                >
+                <wd-button
+                  v-if="source.documentId"
+                  type="text"
+                  size="small"
+                  custom-style="color:#237b61;font-size:12px;padding:0;"
+                  @click="$emit('view-source', source)"
+                  >查看当前原文</wd-button
+                >
               </view>
-            </template>
-            <view class="source-summary">
-              <text selectable
-                >{{ source.summary || "该来源未返回内容摘要。"
-                }}{{ source.truncated ? "…" : "" }}</text
-              >
-              <wd-button
-                v-if="source.documentId"
-                type="text"
-                size="small"
-                custom-style="color:#237b61;font-size:12px;padding:0;"
-                @click="$emit('view-source', source)"
-                >查看当前原文</wd-button
-              >
-            </view>
-          </wd-collapse-item>
-        </wd-collapse>
-        <wd-button
-          v-if="sources.length > 3"
-          type="text"
-          size="small"
-          :icon="showAllSources ? 'arrow-up' : 'arrow-down'"
-          custom-style="height: 34px; color: #287b5f; font-size: 12px; --wot-button-icon-fs: 14px;"
-          @click="showAllSources = !showAllSources"
-        >
-          {{
-            showAllSources ? "收起来源" : `查看全部 ${sources.length} 个来源`
-          }}
-        </wd-button>
+            </wd-collapse-item>
+          </wd-collapse>
+        </view>
       </view>
 
       <view
-        v-if="!message.pending && (message.content || message.error)"
+        v-if="!message.pending && (answer.content || message.error)"
         class="message-actions"
       >
         <wd-button
-          v-if="message.content"
+          v-if="answer.content"
           type="text"
           size="small"
           :icon="copied === 'message' ? 'check' : 'file-copy'"
           custom-style="height: 34px; padding: 0 2px; color: #667085; font-size: 12px; --wot-button-icon-fs: 15px;"
-          @click="copyText(message.content, 'message')"
+          @click="copyText(answer.content, 'message')"
         >
           {{ copied === "message" ? "已复制" : "复制" }}
         </wd-button>
@@ -176,7 +171,9 @@
 
 <script setup>
 import { computed, onBeforeUnmount, ref } from "vue";
+import MessageBlocks from "@/components/MessageBlocks.vue";
 import { normalizeSources, parseMessageContent } from "@/utils/messageContent";
+import { splitMessageReasoning } from "@/utils/reasoning.mjs";
 
 defineOptions({
   options: { virtualHost: true, styleIsolation: "shared" },
@@ -184,20 +181,30 @@ defineOptions({
 
 const props = defineProps({
   message: { type: Object, required: true },
-  assistantName: { type: String, default: "知识助手" },
 });
 defineEmits(["retry", "view-source"]);
 
 const copied = ref("");
 const expandedSource = ref("");
-const showAllSources = ref(false);
+const expandedSources = ref(false);
+const expandedReasoning = ref(false);
 let copiedTimer;
 const isUser = computed(() => props.message.role === "user");
-const blocks = computed(() => parseMessageContent(props.message.content));
-const sources = computed(() => normalizeSources(props.message.sources));
-const visibleSources = computed(() =>
-  showAllSources.value ? sources.value : sources.value.slice(0, 3)
+const answer = computed(() => splitMessageReasoning(props.message));
+const blocks = computed(() => parseMessageContent(answer.value.content));
+const reasoningBlocks = computed(() =>
+  parseMessageContent(answer.value.reasoning, { thought: true })
 );
+const reasoningLabel = computed(() =>
+  answer.value.thinking
+    ? "正在思考…"
+    : props.message.interrupted
+      ? "思考已停止"
+      : props.message.error
+        ? "思考已中断"
+        : "想法、思绪"
+);
+const sources = computed(() => normalizeSources(props.message.sources));
 const errorText = computed(() =>
   typeof props.message.error === "string"
     ? props.message.error
@@ -257,21 +264,6 @@ onBeforeUnmount(() => clearTimeout(copiedTimer));
   gap: 8px;
   margin-bottom: 12px;
 }
-.assistant-mark {
-  display: flex;
-  justify-content: center;
-  align-items: center;
-  width: 26px;
-  height: 26px;
-  flex-shrink: 0;
-  border-radius: 8px;
-  background: #287b5f;
-}
-.assistant-name {
-  color: #344054;
-  font-size: 13px;
-  font-weight: 600;
-}
 .assistant-body {
   color: #344054;
   font-size: 15px;
@@ -279,102 +271,104 @@ onBeforeUnmount(() => clearTimeout(copiedTimer));
   word-break: break-word;
   min-width: 0;
 }
-.content-block {
-  margin-bottom: 10px;
+.reasoning-panel {
+  max-width: 65ch;
+  margin: 8px 0 4px;
 }
-.content-block:last-child {
-  margin-bottom: 0;
-}
-.message-rich-text,
-.inline-rich-text {
-  display: block;
-  font-size: inherit;
-  line-height: inherit;
-  overflow-wrap: anywhere;
-}
-.markdown-heading {
-  color: #1d2939;
-  font-weight: 650;
-  line-height: 1.55;
-  padding-top: 4px;
-}
-.markdown-heading--1 {
-  font-size: 20px;
-}
-.markdown-heading--2 {
-  font-size: 17px;
-}
-.markdown-heading--3,
-.markdown-heading--4,
-.markdown-heading--5,
-.markdown-heading--6 {
-  font-size: 15px;
-}
-.markdown-list-item {
+.reasoning-heading {
   display: flex;
-  align-items: flex-start;
-  gap: 7px;
-  padding: 1px 0;
-}
-.list-marker {
-  flex-shrink: 0;
-  min-width: 12px;
-  color: #667085;
-  text-align: right;
-}
-.inline-rich-text {
-  flex: 1;
-  min-width: 0;
-}
-.content-block--quote {
-  padding: 3px 0 3px 12px;
-  border-left: 3px solid #c8ddd3;
-  color: #667085;
-}
-.markdown-rule {
-  height: 1px;
-  background: #eaecf0;
-  margin: 15px 0;
-}
-.code-block {
-  border-radius: 10px;
-  overflow: hidden;
-  background: #1e293b;
-}
-.code-toolbar {
-  display: flex;
-  justify-content: space-between;
   align-items: center;
-  min-height: 38px;
-  padding: 0 12px;
-  border-bottom: 1px solid #334155;
+  width: 100%;
+  margin: 0;
+  padding: 0;
+  gap: 8px;
+  border: 0;
+  border-radius: 0;
+  background: transparent;
+  color: #71717a;
+  font-size: 16px;
+  font-weight: 400;
+  line-height: 24px;
+  text-align: left;
+  transition: color 150ms;
 }
-.code-language {
-  color: #cbd5e1;
-  font-size: 12px;
-  flex: 1;
+.reasoning-heading::after {
+  border: 0;
+}
+.reasoning-heading--hover {
+  color: #09090b;
+}
+.reasoning-icon {
+  width: 20px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.reasoning-label {
   min-width: 0;
-  margin-right: 12px;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.code-scroll {
-  width: 100%;
-  box-sizing: border-box;
+.reasoning-label--thinking {
+  color: transparent;
+  background: linear-gradient(90deg, #a1a1aa, #18181b, #a1a1aa);
+  background-size: 200% 100%;
+  background-clip: text;
+  -webkit-background-clip: text;
+  animation: reasoning-shimmer 3s linear infinite;
 }
-.code-content {
-  display: block;
-  width: max-content;
-  min-width: 100%;
-  box-sizing: border-box;
-  padding: 12px;
-  color: #e2e8f0;
-  font-family: Consolas, Monaco, monospace;
-  font-size: 13px;
-  line-height: 1.8;
-  white-space: pre;
-  word-break: normal;
+.reasoning-caret {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  transition: transform 150ms;
+}
+.reasoning-caret--expanded {
+  transform: rotate(90deg);
+}
+.reasoning-content {
+  display: flex;
+  align-items: flex-start;
+  gap: 8px;
+  margin-top: 16px;
+  margin-bottom: 12px;
+  color: #71717a;
+  font-size: 14px;
+  line-height: 20px;
+}
+.reasoning-step-icon {
+  display: flex;
+  align-items: center;
+  width: 16px;
+  height: 20px;
+  flex-shrink: 0;
+}
+.reasoning-step-icon image {
+  width: 16px;
+  height: 16px;
+}
+.reasoning-text {
+  flex: 1;
+  min-width: 0;
+}
+@keyframes reasoning-shimmer {
+  from {
+    background-position: 200% 0;
+  }
+  to {
+    background-position: -200% 0;
+  }
+}
+@media (prefers-reduced-motion: reduce) {
+  .reasoning-label--thinking {
+    animation: none;
+    background: none;
+    color: #71717a;
+  }
+  .reasoning-caret,
+  .sources-caret {
+    transition: none;
+  }
 }
 .thinking-state {
   display: flex;
@@ -418,24 +412,50 @@ onBeforeUnmount(() => clearTimeout(copiedTimer));
 .message-sources {
   margin-top: 18px;
 }
-.sources-heading {
-  display: flex;
+.sources-toggle {
+  display: inline-flex;
   align-items: center;
   gap: 7px;
-  margin-bottom: 6px;
+  max-width: 100%;
+  min-height: 44px;
+  box-sizing: border-box;
+  margin: 0;
+  padding: 6px 12px;
+  border: 1px solid #eaecf0;
+  border-radius: 999px;
+  background: #f9fafb;
+  color: #475467;
+  font-size: 12px;
+  font-weight: 500;
+  line-height: 22px;
+  text-align: left;
+}
+.sources-toggle::after {
+  border: 0;
+}
+.sources-toggle--hover {
+  background: #f2f4f7;
 }
 .sources-label {
-  color: #667085;
-  font-size: 12px;
+  white-space: nowrap;
 }
 .sources-count {
   color: #667085;
-  background: #f2f4f7;
-  font-size: 11px;
-  line-height: 18px;
-  min-width: 18px;
-  text-align: center;
-  border-radius: 4px;
+  font-size: 12px;
+  font-weight: 400;
+}
+.sources-caret {
+  width: 12px;
+  height: 12px;
+  flex-shrink: 0;
+  margin-left: 1px;
+  transition: transform 150ms;
+}
+.sources-caret--expanded {
+  transform: rotate(90deg);
+}
+.sources-list {
+  margin-top: 10px;
 }
 .source-heading {
   display: flex;
@@ -480,6 +500,13 @@ onBeforeUnmount(() => clearTimeout(copiedTimer));
   flex-wrap: wrap;
   gap: 16px;
   margin-top: 6px;
+}
+</style>
+<style>
+/* Wot's transition owns the native region; match the admin's short slide. */
+.chat-thought-enter,
+.chat-thought-leave-to {
+  transform: translateY(-8px);
 }
 </style>
 <style scoped>

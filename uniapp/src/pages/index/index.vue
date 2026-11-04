@@ -213,7 +213,7 @@
                 <view v-else class="message-list"
                   ><ChatMessage
                     v-for="message in messages"
-                    :key="message.id"
+                    :key="message.localId || message.id"
                     :message="message"
                     @view-source="openSource"
                     @retry="retryMessage" /></view
@@ -747,6 +747,7 @@ async function sendMessage(value) {
     pending: true,
     question: text,
   };
+  assistant.localId = assistant.id;
   messages.value.push(userMessage, assistant);
   draft.value = "";
   composer.value?.clear();
@@ -770,11 +771,17 @@ async function sendMessage(value) {
       text,
       (event) => {
         if (disposed || expected !== version || operation.cancelled) return;
-        if (event.type === "delta") {
+        if (event.type === "delta" || event.type === "reasoning") {
           const preview = messages.value.find(
             (message) => message.id === assistant.id
           );
-          if (preview) preview.content += event.text;
+          if (preview && event.type === "delta") {
+            preview.content += event.text;
+            preview.reasoningPending = false;
+          } else if (preview) {
+            preview.reasoning = (preview.reasoning || "") + event.text;
+            preview.reasoningPending = !event.done;
+          }
           scrollBottom();
         }
       }
@@ -785,7 +792,11 @@ async function sendMessage(value) {
       (message) => message.id === assistant.id
     );
     if (index >= 0)
-      messages.value.splice(index, 1, { ...result.message, pending: false });
+      messages.value.splice(index, 1, {
+        ...result.message,
+        localId: assistant.localId,
+        pending: false,
+      });
     await refreshConversations();
     if (disposed || expected !== version) return;
     currentConversation.value =
@@ -801,7 +812,9 @@ async function sendMessage(value) {
       messages.value.splice(index, 1, {
         ...assistant,
         content: "",
+        reasoning: "",
         pending: false,
+        reasoningPending: false,
         interrupted: !!error.cancelled,
         error: error.cancelled ? "" : error.message,
       });
