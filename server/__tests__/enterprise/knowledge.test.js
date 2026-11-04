@@ -1473,17 +1473,20 @@ test("same-name TXT/MD uploads use distinct resources and enforce authorization 
     return { status: response.status, body: await response.json() };
   };
   expect(
-    (await upload("a2", own.id, "same.txt", "blocked secret")).status
+    (await upload("a2", own.id, "同名资料.txt", "blocked secret")).status
   ).toBe(404);
-  const a = await upload("a1", own.id, "same.txt", "A TXT 原始文字。");
-  const b = await upload("b1", shared.id, "same.txt", "B TXT 原始文字。");
+  const a = await upload("a1", own.id, "同名资料.txt", "A TXT 原始文字。");
+  const b = await upload("b1", shared.id, "同名资料.txt", "B TXT 原始文字。");
   const md = await upload(
     "a1",
     own.id,
-    "same.md",
+    "同名资料.md",
     "# Markdown\n独立 Markdown 资料。"
   );
   for (const item of [a, b, md]) expect(item.status).toBe(202);
+  expect(a.body.document.title).toBe("同名资料.txt");
+  expect(b.body.document.title).toBe("同名资料.txt");
+  expect(md.body.document.title).toBe("同名资料.md");
   expect((await ready(a.body.document.id)).content).toContain("A TXT");
   expect((await ready(b.body.document.id, "b1")).content).toContain("B TXT");
   expect((await ready(md.body.document.id)).content).toContain("Markdown");

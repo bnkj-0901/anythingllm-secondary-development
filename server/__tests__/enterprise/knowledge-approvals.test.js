@@ -676,13 +676,19 @@ test("disk uploads publish only after review and replacements keep the old downl
   const upload = await uploadFile(
     "a1",
     lib.id,
-    "source.txt",
+    "芯片查询全量数据.txt",
     "first file content"
   );
   expect(upload.status).toBe(202);
+  expect(upload.body.change.title).toBe("芯片查询全量数据.txt");
+  const pending = await mockStore.one(
+    "SELECT payload FROM ep_knowledge_changes WHERE id=$1",
+    upload.body.change.id
+  );
+  expect(JSON.parse(pending.payload).title).toBe("芯片查询全量数据.txt");
   expect((await review("aa", upload.body.change.id)).status).toBe(200);
   const doc = (await request("a2", "/documents")).body.documents.find(
-    (item) => item.title === "source.txt"
+    (item) => item.title === "芯片查询全量数据.txt"
   );
   expect(
     (await request("a2", `/documents/${doc.id}`)).body.document.content
@@ -690,7 +696,7 @@ test("disk uploads publish only after review and replacements keep the old downl
   const replacement = await uploadFile(
     "a2",
     lib.id,
-    "replacement.txt",
+    "替换资料.txt",
     "second reviewed content",
     `/documents/${doc.id}/replace`
   );
@@ -708,6 +714,9 @@ test("disk uploads publish only after review and replacements keep the old downl
   expect(
     (await request("a1", `/documents/${doc.id}`)).body.document.content
   ).toBe("second reviewed content");
+  expect(
+    (await request("a1", `/documents/${doc.id}`)).body.document.title
+  ).toBe("芯片查询全量数据.txt");
 });
 
 test("temporary upload files are removed after successful submissions and authorization failures", async () => {

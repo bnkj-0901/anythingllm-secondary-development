@@ -15,6 +15,7 @@ const providers = require("./providers");
 const { getSettings } = require("./rag-settings");
 const vectorStore = require("./vector-store");
 const fileStore = require("./file-store");
+const { decodeUploadFileName } = require("../utils/files/filename");
 const {
   extensions,
   textFallback,
@@ -102,11 +103,16 @@ const upload = multer({
       fs.mkdir(uploadDirectory, { recursive: true }, (error) =>
         done(error, uploadDirectory)
       ),
-    filename: (_req, file, done) =>
+    filename: (_req, file, done) => {
+      // Normalize before private/public branches derive document and approval
+      // titles. This callback runs once, even when the same upload falls through
+      // from the public-mutation middleware to a private-document route.
+      file.originalname = decodeUploadFileName(file.originalname);
       done(
         null,
         `${store.id()}${path.extname(file.originalname).toLowerCase()}`
-      ),
+      );
+    },
   }),
   limits: { fileSize: maxFileSizeBytes, files: 1, fields: 5, fieldSize: 4096 },
 }).single("file");
